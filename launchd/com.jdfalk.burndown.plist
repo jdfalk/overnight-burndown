@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  file: launchd/com.jdfalk.burndown.plist
+  version: 1.0.0
+
+  Installed via `make install-launchd` to ~/Library/LaunchAgents/.
+  Runs the nightly burndown cycle at 23:00 local time.
+
+  Adjust BurndownBin if the binary lives somewhere other than ~/.local/bin.
+  StandardOutPath / StandardErrorPath capture early-startup messages before
+  the driver's own logger initializes; under normal operation the driver
+  writes structured logs to ~/.burndown/logs/.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jdfalk.burndown</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jdfalk/.local/bin/burndown</string>
+        <string>run</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>23</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jdfalk/.burndown/launchd.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/jdfalk/.burndown/launchd.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SAFE_AI_UTIL_QUIET</key>
+        <string>1</string>
+        <key>SAFE_AI_UTIL_LOG_DIR</key>
+        <string>/Users/jdfalk/.burndown/logs</string>
+        <key>SAFE_AI_UTIL_AUDIT_PATH</key>
+        <string>/Users/jdfalk/.burndown/audit</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>
