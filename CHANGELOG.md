@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 1 step 6: `internal/triage` — Anthropic Opus call that classifies tasks
+  AUTO_MERGE_SAFE / NEEDS_REVIEW / BLOCKED in a single batched request.
+  - Uses the official `anthropic-sdk-go`. Model is config-driven (defaults to
+    `claude-opus-4-7`).
+  - **Tool-forced structured output**: Claude returns decisions via a single
+    forced `record_classifications` tool call with a strict JSON Schema —
+    eliminates free-form JSON drift and post-parse defenses.
+  - **Prompt caching** on the system prompt block (`cache_control: ephemeral`)
+    so repeated triage calls hit the cache at ~0.1× input price.
+  - Conservative-by-default classification rules: when uncertain, the rulebook
+    tells the model to choose NEEDS_REVIEW. The cost of misclassifying a
+    refactor as auto-merge-safe is too high.
+  - Validation: decision count must match input; classifications must be in the
+    canonical enum; non-blocked decisions must carry a `suggested_branch`.
+  - Decisions are reordered to match input slice order even if the model
+    returns them shuffled.
 - Phase 1 step 5: `internal/sources` — task collection from TODO.md, GitHub
   issues, and `plans/*.md`.
   - Three `Collector` implementations sharing a common `Task` shape.
