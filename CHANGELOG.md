@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 1 step 7: `internal/mcp` — stdio JSON-RPC client for safe-ai-util-mcp.
+  - Pluggable `Transport` interface — production uses subprocess pipes
+    (`Spawn`); tests use `io.Pipe` so no shelling out during CI.
+  - `NewClient` performs the MCP `initialize` handshake + `notifications/initialized`
+    eagerly so a misconfigured server fails at construction.
+  - `ListTools(ctx)` returns the server's tool catalog as a `[]ToolDef`
+    that maps directly onto Anthropic SDK tool registration.
+  - `CallTool(ctx, name, args)` dispatches `tools/call` and returns
+    concatenated text content + `isError` flag.
+  - Concurrent-safe by design: writes serialized via mutex, responses
+    demuxed by request ID via `sync.Map`. 8 parallel CallTool's tested
+    under `-race`.
+  - Context cancellation is prompt — pending calls unblock within ~ms
+    of `ctx.Done()`, even if the server never responds.
+  - Transport closure mid-call fails every pending caller with a
+    "transport closed" sentinel rather than hanging forever.
 - Phase 1 step 6: `internal/triage` — Anthropic Opus call that classifies tasks
   AUTO_MERGE_SAFE / NEEDS_REVIEW / BLOCKED in a single batched request.
   - Uses the official `anthropic-sdk-go`. Model is config-driven (defaults to
