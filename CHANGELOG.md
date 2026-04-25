@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 1 step 4: `internal/auth` — GitHub App installation auth.
+  - `Auth` wraps a `bradleyfalzon/ghinstallation/v2.Transport` so every
+    HTTP request through `Auth.HTTPClient()` carries an auto-refreshing
+    installation token (no caller-side refresh logic).
+  - Eager validation: `New()` performs the first token exchange against
+    GitHub at construction time, so a wrong App ID / installation ID /
+    private key surfaces at startup with a clear error rather than inside
+    the first PR-create call hours later.
+  - `InstallationToken(ctx)` for non-Go consumers (git over HTTPS).
+  - Tests use `httptest` + a freshly-generated RSA key; never touch real
+    GitHub or commit any secret material.
 - Phase 1 step 3: `internal/state` — atomic state.json + run lock + task hashing.
   - Stable `HashTask(Source)` keys tasks across nights (sha256 of type+repo+url+content).
   - Save() is atomic via tempfile + fsync + rename — crash mid-write cannot corrupt prior state.
