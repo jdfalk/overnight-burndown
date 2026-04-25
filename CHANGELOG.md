@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 1 step 5: `internal/sources` — task collection from TODO.md, GitHub
+  issues, and `plans/*.md`.
+  - Three `Collector` implementations sharing a common `Task` shape.
+  - `CollectAll` runs every collector and applies issue-wins dedup:
+    matching titles collapse onto the issue with a `TrackedBy` annotation
+    surfacing the absorbed sources in the morning digest.
+  - `[auto-ok]` markers on TODO lines and `<!-- auto-ok -->` markers on
+    plan files set `Task.HasAutoOK`. Issues are auto-ok by virtue of the
+    `auto-ok` label filter.
+  - `NormalizeTitle` strips checkbox / auto-ok prefixes, lowercases, drops
+    punctuation, and collapses whitespace — the basis for strict-equality
+    dedup. Fuzzy matching deferred until v1 misses real near-duplicates.
 - Phase 1 step 4: `internal/auth` — GitHub App installation auth.
   - `Auth` wraps a `bradleyfalzon/ghinstallation/v2.Transport` so every
     HTTP request through `Auth.HTTPClient()` carries an auto-refreshing
