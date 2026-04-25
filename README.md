@@ -36,4 +36,4 @@ Pre-alpha. See `PLAN.md`.
 
 ## License
 
-MIT (TBD)
+MIT
