@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 1 step 3: `internal/state` — atomic state.json + run lock + task hashing.
+  - Stable `HashTask(Source)` keys tasks across nights (sha256 of type+repo+url+content).
+  - Save() is atomic via tempfile + fsync + rename — crash mid-write cannot corrupt prior state.
+  - Load() tolerates a missing file (first-night runs work without bootstrapping)
+    and rejects unsupported `schema_version` so a rolled-back driver can't misread
+    a forward-rolled file.
+  - `AcquireLock()` uses `flock(LOCK_EX|LOCK_NB)` so a crashed run releases its
+    lock automatically when the kernel reaps the process — no stale-PID dance.
+  - `InFlight()` filters tasks with an open PR but no terminal status, used for
+    hybrid-resume on subsequent nights.
+  - Concurrent-safe `Upsert`/`Get` (sync.Mutex on Tasks map). Tested under -race.
+- Bumped Go floor to 1.25 (transitive requirement of new deps).
 - Phase 1 step 2: `internal/config` — YAML config loader, schema, and validator.
   - Schema covers anthropic models, github App auth, paths, budget caps,
     concurrency, defaults, and per-repo settings.

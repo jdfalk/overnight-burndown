@@ -1,0 +1,261 @@
+package state
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+)
+
+// ---------------------------------------------------------------------------
+// HashTask determinism + sensitivity
+// ---------------------------------------------------------------------------
+
+func TestHashTask_StableForIdenticalSource(t *testing.T) {
+	src := Source{
+		Type:        SourceIssue,
+		Repo:        "jdfalk/audiobook-organizer",
+		URL:         "https://github.com/jdfalk/audiobook-organizer/issues/42",
+		ContentHash: HashContent("fix typo in README"),
+		Title:       "Fix README typo",
+	}
+	a, b := HashTask(src), HashTask(src)
+	if a != b {
+		t.Fatalf("HashTask must be deterministic: %s vs %s", a, b)
+	}
+}
+
+func TestHashTask_DiffersOnContentChange(t *testing.T) {
+	base := Source{
+		Type:        SourceIssue,
+		Repo:        "jdfalk/audiobook-organizer",
+		URL:         "https://github.com/jdfalk/audiobook-organizer/issues/42",
+		ContentHash: HashContent("v1"),
+	}
+	other := base
+	other.ContentHash = HashContent("v2")
+	if HashTask(base) == HashTask(other) {
+		t.Fatal("HashTask should differ when ContentHash differs")
+	}
+}
+
+func TestHashTask_DiffersOnURLChange(t *testing.T) {
+	a := Source{Type: SourceIssue, Repo: "x/y", URL: "u1", ContentHash: "abc"}
+	b := a
+	b.URL = "u2"
+	if HashTask(a) == HashTask(b) {
+		t.Fatal("HashTask should be URL-sensitive")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Save/Load roundtrip + atomicity
+// ---------------------------------------------------------------------------
+
+func TestSaveLoad_Roundtrip(t *testing.T) {
+	td := t.TempDir()
+	path := filepath.Join(td, "state.json")
+
+	s := New()
+	src := Source{Type: SourceTODO, Repo: "x/y", URL: "TODO.md#L1", ContentHash: "abc"}
+	t1 := &TaskState{
+		Hash:   HashTask(src),
+		Source: src,
+		Status: StatusQueued,
+	}
+	s.Upsert(t1)
+	if err := s.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded.Tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(loaded.Tasks))
+	}
+	got, ok := loaded.Get(t1.Hash)
+	if !ok {
+		t.Fatal("task missing after roundtrip")
+	}
+	if got.Status != StatusQueued {
+		t.Errorf("status: got %q want %q", got.Status, StatusQueued)
+	}
+	if got.FirstSeen.IsZero() {
+		t.Error("FirstSeen should be set on first Upsert")
+	}
+}
+
+func TestLoad_MissingFileReturnsEmpty(t *testing.T) {
+	td := t.TempDir()
+	s, err := Load(filepath.Join(td, "nonexistent.json"))
+	if err != nil {
+		t.Fatalf("missing file should be empty-ok, got: %v", err)
+	}
+	if s == nil || len(s.Tasks) != 0 {
+		t.Fatalf("expected empty state, got %+v", s)
+	}
+	if s.SchemaVersion != SchemaVersion {
+		t.Errorf("schema version: got %d want %d", s.SchemaVersion, SchemaVersion)
+	}
+}
+
+func TestLoad_RejectsFutureSchema(t *testing.T) {
+	td := t.TempDir()
+	path := filepath.Join(td, "state.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version": 999, "tasks": {}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unsupported schema_version")
+	}
+}
+
+func TestSave_LeavesNoTempFile(t *testing.T) {
+	td := t.TempDir()
+	path := filepath.Join(td, "state.json")
+	s := New()
+	if err := s.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(td)
+	for _, e := range entries {
+		name := e.Name()
+		if name != "state.json" {
+			t.Errorf("unexpected leftover after Save: %q", name)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Upsert preserves FirstSeen, bumps LastSeen+LastUpdated
+// ---------------------------------------------------------------------------
+
+func TestUpsert_PreservesFirstSeen(t *testing.T) {
+	s := New()
+	src := Source{Type: SourceIssue, Repo: "x/y", URL: "u", ContentHash: "abc"}
+	hash := HashTask(src)
+	first := &TaskState{Hash: hash, Source: src, Status: StatusQueued}
+	s.Upsert(first)
+	originalFirstSeen := first.FirstSeen
+
+	second := &TaskState{Hash: hash, Source: src, Status: StatusInFlight}
+	s.Upsert(second)
+
+	got, _ := s.Get(hash)
+	if !got.FirstSeen.Equal(originalFirstSeen) {
+		t.Errorf("FirstSeen should be preserved across upserts: original=%v got=%v",
+			originalFirstSeen, got.FirstSeen)
+	}
+	if got.Status != StatusInFlight {
+		t.Errorf("Status should reflect latest upsert, got %q", got.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// InFlight returns only tasks with PR + non-terminal status
+// ---------------------------------------------------------------------------
+
+func TestInFlight(t *testing.T) {
+	s := New()
+	mk := func(hashSeed, prNum int, status Status) *TaskState {
+		src := Source{Type: SourceTODO, URL: "u", ContentHash: HashContent(string(rune(hashSeed)))}
+		return &TaskState{
+			Hash:     HashTask(src),
+			Source:   src,
+			Status:   status,
+			PRNumber: prNum,
+		}
+	}
+	s.Upsert(mk(1, 0, StatusQueued))    // queued, no PR yet
+	s.Upsert(mk(2, 100, StatusInFlight)) // PR open, in flight  ← expected
+	s.Upsert(mk(3, 101, StatusDraft))   // draft is terminal
+	s.Upsert(mk(4, 102, StatusShipped)) // shipped is terminal
+	s.Upsert(mk(5, 103, StatusFailed))  // failed is terminal
+
+	got := s.InFlight()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 in-flight task, got %d: %+v", len(got), got)
+	}
+	if got[0].PRNumber != 100 {
+		t.Errorf("expected PR 100, got %d", got[0].PRNumber)
+	}
+}
+
+func TestStatus_IsTerminal(t *testing.T) {
+	terminal := []Status{StatusShipped, StatusDraft, StatusBlocked, StatusFailed}
+	for _, s := range terminal {
+		if !s.IsTerminal() {
+			t.Errorf("%q should be terminal", s)
+		}
+	}
+	live := []Status{StatusQueued, StatusInFlight, StatusRequeued}
+	for _, s := range live {
+		if s.IsTerminal() {
+			t.Errorf("%q should not be terminal", s)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AcquireLock — second acquisition fails; release lets it succeed again
+// ---------------------------------------------------------------------------
+
+func TestAcquireLock_Contention(t *testing.T) {
+	td := t.TempDir()
+	path := filepath.Join(td, "run.lock")
+
+	release1, err := AcquireLock(path)
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+
+	// Second acquire from the same process must fail.
+	_, err2 := AcquireLock(path)
+	if !errors.Is(err2, ErrLocked) {
+		t.Fatalf("second acquire should return ErrLocked, got: %v", err2)
+	}
+
+	// After release, a fresh acquire should succeed.
+	release1()
+	release2, err := AcquireLock(path)
+	if err != nil {
+		t.Fatalf("re-acquire after release: %v", err)
+	}
+	release2()
+}
+
+func TestAcquireLock_ReleaseIsIdempotent(t *testing.T) {
+	td := t.TempDir()
+	path := filepath.Join(td, "run.lock")
+	release, err := AcquireLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	release() // should not panic
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent Upsert is goroutine-safe (race detector would flag any issue)
+// ---------------------------------------------------------------------------
+
+func TestUpsert_ConcurrentSafe(t *testing.T) {
+	s := New()
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			src := Source{Type: SourceTODO, URL: "u", ContentHash: HashContent(string(rune(i)))}
+			s.Upsert(&TaskState{Hash: HashTask(src), Source: src, Status: StatusQueued})
+		}(i)
+	}
+	wg.Wait()
+	if len(s.Tasks) != 50 {
+		t.Errorf("expected 50 tasks after concurrent upsert, got %d", len(s.Tasks))
+	}
+}
