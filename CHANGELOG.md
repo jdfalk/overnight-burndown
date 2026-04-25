@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 1 step 8a: `internal/agent` — implementer agent loop (Haiku via
+  Anthropic SDK with MCP tools registered).
+  - Manual tool-use loop: send to Claude → execute each ToolUseBlock by
+    forwarding to MCP → feed results back as tool_result blocks → repeat
+    until end_turn or iteration cap.
+  - Default tool allowlist excludes git_* and gh_* — git and PR ops are
+    the harness's job, not the agent's. Agent gets fs_*, run_*, py_pytest only.
+  - MCP errors become `is_error: true` tool_result blocks (the agent can
+    recover) rather than aborting the loop.
+  - System prompt is cached via `cache_control: ephemeral`.
+  - Captures the agent's final summary on every turn so the PR body /
+    digest entry survives even if a panic interrupts result construction.
+  - MCPClient interface (rather than concrete `*mcp.Client`) so tests
+    inject a stub.
 - Phase 1 step 7: `internal/mcp` — stdio JSON-RPC client for safe-ai-util-mcp.
   - Pluggable `Transport` interface — production uses subprocess pipes
     (`Spawn`); tests use `io.Pipe` so no shelling out during CI.
