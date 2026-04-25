@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 1 step 8b: `internal/dispatch` — worktree-per-task fan-out with
+  errgroup-bounded concurrency.
+  - `AddWorktree` / `RemoveWorktree` / `DeleteBranch` shell-out helpers
+    around `git worktree`. Tested against real `t.TempDir()` repos.
+  - `SlugifyForBranch` for safe kebab-case branch components, with a
+    40-char cap and a stable fallback ("task") for empty input.
+  - `Dispatcher` runs every task through the agent under a configurable
+    concurrency cap (default 4). Per-task failures are isolated — one
+    failing task doesn't abort the others.
+  - Branch deduplication when triage produces colliding suggestions
+    (collisions get a numeric suffix).
+  - Failed worktrees are left on disk for postmortem inspection
+    (cleanup is a separate concern, retained 7d per PLAN.md).
+  - Pluggable `RunAgent` and `SpawnMCP` hooks so tests don't need
+    Anthropic or `safe-ai-util-mcp`.
 - Phase 1 step 8a: `internal/agent` — implementer agent loop (Haiku via
   Anthropic SDK with MCP tools registered).
   - Manual tool-use loop: send to Claude → execute each ToolUseBlock by
