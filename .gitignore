@@ -1,0 +1,18 @@
+# Build artifacts
+/bin/
+/dist/
+*.test
+*.out
+
+# Local state (must never be committed)
+/.burndown-state-local/
+*.private.yaml
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Go
+vendor/
