@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 1 step 9b: CI watch + merge gating, completing `internal/ghops`.
+  - `Publisher.WatchCI` polls check-runs + legacy combined status until any
+    check fails or every check is green; returns CIPending on timeout
+    (default 30 min) without erroring. Polls both APIs because GitHub still
+    runs both in parallel — failure on either side wins.
+  - `Publisher.ListChangedFiles` paginates `/pulls/N/files`; helper
+    `TotalLinesChanged` sums additions+deletions for the diff-size cap.
+  - `EvaluateGate` enforces all four locked B2 gates from PLAN.md:
+    classification, auto-ok marker, per-repo path allowlist, CI green.
+    Plus hard vetoes for forced-review paths and diff > cap. All gates are
+    evaluated even after the first failure so the digest can list every
+    reason a PR didn't auto-merge.
+  - `matchOne` supports globstar `**` semantics: `**` alone, leading
+    `**/X`, embedded `**/X/**`, and trailing `X/**`. Matches at any depth;
+    partial-segment matches don't count (`migrationsplus/x` does not match
+    `**/migrations/**`).
+  - `Publisher.AutoMerge` issues the GraphQL `enablePullRequestAutoMerge`
+    mutation with REBASE merge method (matches the repos' rebase-only
+    setting that we configured earlier).
+  - `Publisher.ConvertToDraft` uses GraphQL since REST has no public
+    endpoint for ready→draft.
+  - `Publisher.AddLabel` + `CommentOnPR` for failure annotation
+    (`burndown-failed` label + comment listing every gate that failed).
+  - GraphQL helper uses `client.NewRequest` for proper BaseURL resolution
+    under test.
 - Phase 1 step 9a: `internal/ghops` — driver-side commit, push, and PR
   creation. Agents never touch git or GitHub.
   - `Publisher.CommitAndPush` stages all changes in the worktree, commits
