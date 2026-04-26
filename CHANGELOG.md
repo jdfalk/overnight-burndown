@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 1 step 10: `internal/budget` — token-spend + wall-clock tracking
+  with the configurable abort threshold from PLAN.md (default 80%).
+  - `Record(model, usage)` accumulates per-model spend using a hard-coded
+    pricing table for Opus 4.7 / 4.6, Sonnet 4.6, and Haiku 4.5. Unknown
+    models fall back to Opus rates (pessimistic-safe).
+  - `ShouldAbort()` returns (true, reason) when either the dollar cap or
+    wall-clock cap reaches the abort threshold. Either trigger fires
+    independently — wall-clock 80% with $0.10 spent still aborts (CI is
+    probably hung, no point continuing).
+  - `Snapshot()` is a consistent point-in-time view for digest rendering:
+    spend, token totals (input/output/cached/written), elapsed, caps,
+    threshold. Helpers `FractionSpent()` and `FractionElapsed()` give
+    digest-friendly percentages without divide-by-zero footguns.
+  - Concurrent-safe: `sync.Mutex` around the running totals; tested under
+    `-race` with 50 concurrent Records + 20 racing Snapshots/ShouldAborts.
+  - Time is injectable via `nowFn` so tests drive elapsed deterministically
+    without sleeping.
 - Phase 1 step 9b: CI watch + merge gating, completing `internal/ghops`.
   - `Publisher.WatchCI` polls check-runs + legacy combined status until any
     check fails or every check is green; returns CIPending on timeout
