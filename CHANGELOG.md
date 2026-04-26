@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 1 orchestrator** — `internal/runner` + real `burndown run`
+  subcommand. Wires every package together into the nightly cycle:
+  acquire lock → for each repo (collect → triage → dispatch → ghops
+  sequence) → render digest → save state → release lock.
+  - `Runner` struct accepts injected hooks for every external dep
+    (Anthropic, GitHub auth, MCP spawn, agent.Run, RepoPublisher).
+    Production wiring lives in `cmd/burndown/main.go`; tests stub
+    everything via httptest.
+  - Per-repo error isolation: one repo failing logs and continues.
+  - Per-task error isolation: agent / ghops failures mark the
+    Outcome failed without aborting other tasks.
+  - Mode handling: `dry-run` skips dispatch entirely; `draft-only`
+    opens PRs as draft and never auto-merges; `full` runs the
+    complete sequence.
+  - Budget abort check between tasks within a repo; remaining tasks
+    requeued for tomorrow.
+  - PAUSE file kill switch at `~/.burndown/PAUSE` aborts before any
+    work happens.
+  - Lock contention exits cleanly without doing anything.
+  - `cmd/burndown` wires defaults: real subprocess MCP spawn with
+    SAFE_AI_UTIL_REPO_ROOT pinned per-worktree, real agent.Run, real
+    *ghops.Publisher, real *auth.Auth.
 - Phase 1 step 11: `internal/policy` — render per-repo `AllowlistOverlay`
   TOML files for safe-ai-util's `--policy-overlay` flag.
   - Mirrors safe-ai-util's narrowing-only schema: `permissive_mode`,
