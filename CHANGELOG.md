@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 1 step 11: `internal/policy` — render per-repo `AllowlistOverlay`
+  TOML files for safe-ai-util's `--policy-overlay` flag.
+  - Mirrors safe-ai-util's narrowing-only schema: `permissive_mode`,
+    `always_allowed`, `blocked`, `conditionally_allowed`.
+  - Hand-rolled deterministic TOML render — no encoder dep, sorted keys,
+    byte-identical output for identical input.
+  - `Tighten(other)` composes overlays narrow-only (Blocked unioned,
+    AlwaysAllowed intersected, restrictions tightened, permissive=false
+    wins).
+  - `WriteToFile` is atomic (tempfile + rename).
+- Phase 1 step 12: `internal/digest` — morning markdown summary
+  (`burndown-digest-YYYY-MM-DD.md`).
+  - Sections per PLAN.md D2: TL;DR (always), Shipped, Draft, Blocked,
+    Failed, Requeued, Policy violations, Spend.
+  - Empty sections omitted to keep digests scannable.
+  - Outcomes sorted by branch / source URL for deterministic output.
+  - Multi-line agent summaries collapse to one line in list items;
+    durations render without zero-valued components (`1h23m17s`, not
+    `1h23m17.000000s`).
 - Phase 1 step 10: `internal/budget` — token-spend + wall-clock tracking
   with the configurable abort threshold from PLAN.md (default 80%).
   - `Record(model, usage)` accumulates per-model spend using a hard-coded
