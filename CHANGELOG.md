@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 1 step 9a: `internal/ghops` — driver-side commit, push, and PR
+  creation. Agents never touch git or GitHub.
+  - `Publisher.CommitAndPush` stages all changes in the worktree, commits
+    as the configured bot identity, and pushes via a one-shot HTTPS URL
+    that carries the App installation token. Token is never written to
+    `.git/config` or any file on disk.
+  - `ErrNoChanges` sentinel for the empty-diff case (agent produced no
+    output) — callers treat it as a successful no-op.
+  - Token is **redacted** (`***`) from any error output before propagating,
+    so a push failure can't leak credentials into logs or PR comments.
+  - `Publisher.OpenPR` opens a PR with classification-aware draft state
+    (NEEDS_REVIEW → draft, AUTO_MERGE_SAFE → not draft).
+  - Pluggable `gitRunner` so tests can intercept push and verify against
+    a local bare repo without network egress.
 - Phase 1 step 8b: `internal/dispatch` — worktree-per-task fan-out with
   errgroup-bounded concurrency.
   - `AddWorktree` / `RemoveWorktree` / `DeleteBranch` shell-out helpers
