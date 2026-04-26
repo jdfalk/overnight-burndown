@@ -155,7 +155,7 @@ func jsonSchemaForDecisions() map[string]any {
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,
-					"required":             []string{"task_id", "classification", "reason", "est_complexity"},
+					"required":             []string{"task_id", "classification", "reason", "est_complexity", "suggested_branch"},
 					"properties": map[string]any{
 						"task_id":          map[string]any{"type": "string"},
 						"classification":   map[string]any{"type": "string", "enum": []string{string(ClassAutoMergeSafe), string(ClassNeedsReview), string(ClassBlocked)}},
