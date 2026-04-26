@@ -6,12 +6,34 @@
 # Tilde paths (~ and ~/...) are expanded against $HOME at load time.
 
 # ---------------------------------------------------------------------------
-# Anthropic — model selection + API-key env var
+# LLM providers — credentials per backend
 # ---------------------------------------------------------------------------
+# Each provider block holds the API-key env-var name (NOT the key itself)
+# plus an optional base_url override for self-hosted / proxy / Azure / etc.
+# You only need credentials for the providers actually used by triage or
+# the implementer agent below.
+
 anthropic:
-  triage_model: claude-opus-4-7        # Used for one batched classification call per repo per night
-  implementer_model: claude-haiku-4-5  # Used for each per-task agent loop (parallel)
-  api_key_env: ANTHROPIC_API_KEY       # Name of the env var holding your API key (NOT the key itself)
+  api_key_env: ANTHROPIC_API_KEY
+
+openai:
+  api_key_env: OPENAI_API_KEY
+  # base_url: https://openrouter.ai/api/v1   # optional — Azure/OpenRouter/vLLM/etc.
+
+# ---------------------------------------------------------------------------
+# Per-feature LLM selection
+# ---------------------------------------------------------------------------
+# Each LLM-using feature picks its provider + model independently. A common
+# pattern: keep meta-work (triage, planning) on Claude, push high-volume
+# implementer work to OpenAI for cost.
+
+triage:
+  provider: anthropic                  # anthropic | openai
+  model: claude-opus-4-7               # exact model id for the chosen provider
+
+implementer:
+  provider: openai                     # different provider from triage is fine
+  model: gpt-5                         # used for each per-task agent loop (parallel)
 
 # ---------------------------------------------------------------------------
 # GitHub App auth

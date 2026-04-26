@@ -1,27 +1,27 @@
 // Package triage classifies tasks into AUTO_MERGE_SAFE / NEEDS_REVIEW / BLOCKED
-// using a single batched call to Claude.
+// using a single batched call to a configurable LLM provider.
 //
 // Why one batched call: triage is the cheapest opportunity to compose multiple
 // tasks into one prefix-cacheable system prompt + one user message, avoiding
 // per-task overhead. A 50-task night fits comfortably in a single Opus 4.7
-// request and gets the best possible cache-read economics on subsequent
-// nights (the system prompt is identical run-over-run).
+// or GPT-5 request and gets the best possible cache-read economics on
+// subsequent nights (the system prompt is identical run-over-run).
 //
-// Why tool-forced output instead of free-form JSON: forcing a single
-// `record_classifications` tool call gives us a hard schema validated by
-// the API. Free-form JSON in `text` content drifts (extra prose, markdown
-// fences, off-schema fields) and requires defensive post-parsing.
+// Why tool-forced output: the model returns a single forced tool call with
+// a strict JSON Schema. Both Anthropic's tool_use and OpenAI's function
+// calling support this pattern symmetrically; free-form JSON in text content
+// drifts (markdown fences, off-schema fields, trailing prose) on either side.
+//
+// Backends: see anthropic.go (default) and openai.go for the two
+// implementations of Provider. The orchestrator picks one based on
+// `triage.provider` in the config.
 package triage
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/jdfalk/overnight-burndown/internal/sources"
 )
@@ -49,110 +49,23 @@ func (c Classification) IsValid() bool {
 // task_id (we use the source URL as the stable id since hashes are long
 // hex strings the model wastes attention on).
 type Decision struct {
-	TaskID           string         `json:"task_id"`
-	Classification   Classification `json:"classification"`
-	Reason           string         `json:"reason"`
-	EstComplexity    int            `json:"est_complexity"`
-	SuggestedBranch  string         `json:"suggested_branch,omitempty"`
+	TaskID          string         `json:"task_id"`
+	Classification  Classification `json:"classification"`
+	Reason          string         `json:"reason"`
+	EstComplexity   int            `json:"est_complexity"`
+	SuggestedBranch string         `json:"suggested_branch,omitempty"`
 }
 
-// Triager wraps the Anthropic client and remembers the model name. Construct
-// once per run; safe for concurrent use.
-type Triager struct {
-	client anthropic.Client
-	model  anthropic.Model
+// Provider is the LLM-backend abstraction every triage backend satisfies.
+// The orchestrator constructs one (Anthropic or OpenAI) based on config and
+// passes it to the runner.
+type Provider interface {
+	Triage(ctx context.Context, tasks []sources.Task) ([]Decision, error)
 }
 
-// NewTriager builds a Triager. The api key is read from ANTHROPIC_API_KEY by
-// default; the optional opts let callers inject `option.WithBaseURL` for
-// tests.
-func NewTriager(model string, opts ...option.RequestOption) *Triager {
-	return &Triager{
-		client: anthropic.NewClient(opts...),
-		model:  anthropic.Model(model),
-	}
-}
-
-// Triage classifies a batch of tasks in a single Anthropic call.
-//
-// Behavior:
-//   - Returns one Decision per input task, in the same order.
-//   - Errors are returned without partial results; the caller decides whether
-//     to retry or skip the night.
-//   - The system prompt is marked cache_control=ephemeral so subsequent
-//     calls (same night, next night) read from cache at ~0.1× input price.
-func (t *Triager) Triage(ctx context.Context, tasks []sources.Task) ([]Decision, error) {
-	if len(tasks) == 0 {
-		return nil, nil
-	}
-
-	userPayload, err := buildUserPayload(tasks)
-	if err != nil {
-		return nil, fmt.Errorf("triage: build payload: %w", err)
-	}
-
-	tools := []anthropic.ToolUnionParam{
-		{OfTool: &anthropic.ToolParam{
-			Name:        "record_classifications",
-			Description: anthropic.String("Record one classification per input task. Must be called exactly once with one entry per task in the input."),
-			InputSchema: anthropic.ToolInputSchemaParam{
-				Properties: map[string]any{
-					"decisions": map[string]any{
-						"type": "array",
-						"items": map[string]any{
-							"type": "object",
-							"additionalProperties": false,
-							"required": []string{"task_id", "classification", "reason", "est_complexity"},
-							"properties": map[string]any{
-								"task_id":          map[string]any{"type": "string"},
-								"classification":   map[string]any{"type": "string", "enum": []string{string(ClassAutoMergeSafe), string(ClassNeedsReview), string(ClassBlocked)}},
-								"reason":           map[string]any{"type": "string"},
-								"est_complexity":   map[string]any{"type": "integer", "minimum": 1, "maximum": 5},
-								"suggested_branch": map[string]any{"type": "string"},
-							},
-						},
-					},
-				},
-				Required: []string{"decisions"},
-			},
-		}},
-	}
-
-	params := anthropic.MessageNewParams{
-		Model:     t.model,
-		MaxTokens: 16000,
-		System: []anthropic.TextBlockParam{{
-			Text:         classificationSystemPrompt,
-			CacheControl: anthropic.NewCacheControlEphemeralParam(),
-		}},
-		Tools: tools,
-		ToolChoice: anthropic.ToolChoiceUnionParam{
-			OfTool: &anthropic.ToolChoiceToolParam{Name: "record_classifications"},
-		},
-		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(userPayload)),
-		},
-	}
-
-	resp, err := t.client.Messages.New(ctx, params)
-	if err != nil {
-		return nil, fmt.Errorf("triage: anthropic call: %w", err)
-	}
-
-	decisions, err := extractDecisions(resp)
-	if err != nil {
-		return nil, fmt.Errorf("triage: extract decisions: %w", err)
-	}
-
-	if err := validateAgainstInput(tasks, decisions); err != nil {
-		return nil, fmt.Errorf("triage: validate: %w", err)
-	}
-
-	// Reorder to match the input slice. The model is instructed to preserve
-	// order but small models occasionally swap; defensive reorder keeps the
-	// caller's invariants simple.
-	return reorderToInput(tasks, decisions), nil
-}
+// ---------------------------------------------------------------------------
+// shared helpers used by both backend implementations
+// ---------------------------------------------------------------------------
 
 // taskInput is the per-task shape we hand the model. We deliberately omit
 // the full body — too many tokens for triage. A 600-char excerpt is plenty
@@ -191,25 +104,9 @@ func buildUserPayload(tasks []sources.Task) (string, error) {
 	return string(b), nil
 }
 
-func extractDecisions(resp *anthropic.Message) ([]Decision, error) {
-	for _, block := range resp.Content {
-		switch v := block.AsAny().(type) {
-		case anthropic.ToolUseBlock:
-			if v.Name != "record_classifications" {
-				continue
-			}
-			var payload struct {
-				Decisions []Decision `json:"decisions"`
-			}
-			if err := json.Unmarshal([]byte(v.JSON.Input.Raw()), &payload); err != nil {
-				return nil, fmt.Errorf("decode tool input: %w", err)
-			}
-			return payload.Decisions, nil
-		}
-	}
-	return nil, errors.New("no record_classifications tool call in response")
-}
-
+// validateAgainstInput enforces the post-call invariants every backend must
+// honor: count match, valid enum, known task IDs, branch present for
+// non-blocked decisions.
 func validateAgainstInput(tasks []sources.Task, decisions []Decision) error {
 	if len(decisions) != len(tasks) {
 		return fmt.Errorf("decision count %d != task count %d", len(decisions), len(tasks))
@@ -243,3 +140,32 @@ func reorderToInput(tasks []sources.Task, decisions []Decision) []Decision {
 	}
 	return out
 }
+
+// jsonSchemaForDecisions returns the JSON schema both providers send as the
+// tool's input schema. Identical text on both sides keeps the rulebook
+// changes single-sourced.
+func jsonSchemaForDecisions() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"decisions"},
+		"properties": map[string]any{
+			"decisions": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"required":             []string{"task_id", "classification", "reason", "est_complexity"},
+					"properties": map[string]any{
+						"task_id":          map[string]any{"type": "string"},
+						"classification":   map[string]any{"type": "string", "enum": []string{string(ClassAutoMergeSafe), string(ClassNeedsReview), string(ClassBlocked)}},
+						"reason":           map[string]any{"type": "string"},
+						"est_complexity":   map[string]any{"type": "integer", "minimum": 1, "maximum": 5},
+						"suggested_branch": map[string]any{"type": "string"},
+					},
+				},
+			},
+		},
+	}
+}
+

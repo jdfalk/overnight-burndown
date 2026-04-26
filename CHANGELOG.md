@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Pluggable LLM providers** — every LLM-using feature (triage, implementer
+  agent) picks its backend independently via config. Anthropic + OpenAI ship
+  as first-class providers behind interfaces.
+  - `triage.Provider` interface with two impls: `AnthropicTriager` (existing
+    logic, renamed) and new `OpenAITriager` using OpenAI function calling
+    with `strict: true` JSON Schema. Same `record_classifications` tool
+    contract on both sides.
+  - New `agent.RunOpenAI` parallel to `agent.Run`. Same loop semantics
+    (manual tool-use, MCP-forwarded tools, allowlist filter, MCP errors
+    recoverable as is_error results, iteration cap). Reuses the implementer
+    system prompt verbatim — no per-backend prompt drift.
+  - Config schema:
+    - New `openai:` block with `api_key_env` + optional `base_url` (Azure /
+      OpenRouter / vLLM / etc).
+    - New `triage:` and `implementer:` blocks each with `provider` + `model`.
+      Legacy `anthropic.{triage_model,implementer_model}` still works —
+      applyDefaults derives provider=anthropic from those when the new
+      blocks are absent.
+    - Validator only requires credentials for providers actually used —
+      pure-OpenAI configs don't need an Anthropic key and vice versa.
+  - `cmd/burndown` builds the right SDK clients on demand and selects the
+    `RunAgentFunc` via a closure that captures the chosen provider's client.
+  - Verified end-to-end: `burndown run --dry-run` against audiobook-organizer
+    with `triage.provider=openai`, `implementer.provider=openai` makes a
+    real call to OpenAI's API (caught here by a placeholder API key — 401
+    surfaced cleanly per-repo without crashing the run).
 - **Phase 1 closing PR** — operator docs + sample configs. After this
   the system is deployable in dry-run mode against audiobook-organizer.
   - `README.md` rewritten as a real quickstart: install steps, GitHub App

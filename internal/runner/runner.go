@@ -40,6 +40,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	openaiOption "github.com/openai/openai-go/option"
 	"github.com/google/go-github/v84/github"
 
 	"github.com/jdfalk/overnight-burndown/internal/auth"
@@ -102,8 +103,8 @@ type Runner struct {
 
 	// Triager is the triage classifier. Injectable so tests can point
 	// at a stubbed httptest server. When nil, applyDefaults builds one
-	// using the configured triage model + api_key_env.
-	Triager *triage.Triager
+	// using the configured triage.provider + model + api_key_env.
+	Triager triage.Provider
 
 	// Now is injectable for deterministic digest dates.
 	Now func() time.Time
@@ -206,7 +207,7 @@ type repoResult struct {
 	Requeued       []dispatch.TaskWithDecision
 }
 
-func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t *triage.Triager, b *budget.Budget) (*repoResult, error) {
+func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t triage.Provider, b *budget.Budget) (*repoResult, error) {
 	repoFullName := repoCfg.Owner + "/" + repoCfg.Name
 	out := &repoResult{
 		PRs:            map[string]digest.PRInfo{},
@@ -448,11 +449,18 @@ func (r *Runner) applyDefaults() {
 		r.Now = time.Now
 	}
 	if r.Triager == nil {
-		apiKey := os.Getenv(r.Config.Anthropic.APIKeyEnv)
-		r.Triager = triage.NewTriager(
-			r.Config.Anthropic.TriageModel,
-			option.WithAPIKey(apiKey),
-		)
+		switch r.Config.Triage.Provider {
+		case config.ProviderOpenAI:
+			r.Triager = triage.NewOpenAI(
+				r.Config.Triage.Model,
+				openaiOption.WithAPIKey(os.Getenv(r.Config.OpenAI.APIKeyEnv)),
+			)
+		default: // anthropic
+			r.Triager = triage.NewAnthropic(
+				r.Config.Triage.Model,
+				option.WithAPIKey(os.Getenv(r.Config.Anthropic.APIKeyEnv)),
+			)
+		}
 	}
 	if r.AuthForRepo == nil {
 		r.AuthForRepo = func(ctx context.Context, cfg config.GitHubConfig) (ghops.TokenSource, *http.Client, error) {
