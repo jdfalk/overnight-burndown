@@ -1,0 +1,93 @@
+# Example overnight-burndown configuration.
+#
+# Copy to ~/.burndown/config.yaml and edit for your setup. Every key shown
+# below is required unless explicitly noted as optional.
+#
+# Tilde paths (~ and ~/...) are expanded against $HOME at load time.
+
+# ---------------------------------------------------------------------------
+# Anthropic — model selection + API-key env var
+# ---------------------------------------------------------------------------
+anthropic:
+  triage_model: claude-opus-4-7        # Used for one batched classification call per repo per night
+  implementer_model: claude-haiku-4-5  # Used for each per-task agent loop (parallel)
+  api_key_env: ANTHROPIC_API_KEY       # Name of the env var holding your API key (NOT the key itself)
+
+# ---------------------------------------------------------------------------
+# GitHub App auth
+# ---------------------------------------------------------------------------
+# Only required when at least one repo's mode is non-dry-run. A pure
+# dry-run config can omit this whole section and burndown will hit the
+# unauthenticated GitHub issues endpoint (subject to anonymous rate limits).
+#
+# Recommended scopes when creating the App at github.com/settings/apps:
+#   - contents: write
+#   - pull_requests: write
+#   - issues: read
+#   - checks: read
+#   - metadata: read
+# Do NOT grant: workflows, administration, secrets.
+github:
+  app_id: 1234567
+  installation_id: 7654321
+  private_key_path: ~/.burndown/burndown-bot.pem  # PEM file from your App's settings page
+
+# ---------------------------------------------------------------------------
+# Filesystem layout
+# ---------------------------------------------------------------------------
+paths:
+  state_dir: ~/.burndown                       # state.json, run.lock, PAUSE file live here
+  worktree_root: ~/.burndown/worktrees         # one git worktree per task; failed worktrees retained 7d
+  digest_dir: ~                                # ~/burndown-digest-YYYY-MM-DD.md
+  audit_dir: ~/.burndown/audit                 # safe-ai-util JSONL audit logs (one per night)
+  log_dir: ~/.burndown/logs                    # safe-ai-util per-invocation logs
+
+# ---------------------------------------------------------------------------
+# Per-night budget caps — either trip aborts cleanly with a partial digest
+# ---------------------------------------------------------------------------
+budget:
+  max_dollars: 5.0          # Anthropic spend ceiling
+  max_wall_seconds: 7200    # 2 hours wall-clock
+  abort_threshold: 0.8      # Abort at 80% of either cap (graceful — finish in-flight, requeue rest)
+
+# ---------------------------------------------------------------------------
+# Concurrency
+# ---------------------------------------------------------------------------
+concurrency:
+  max_parallel_agents: 4    # Hard-capped at 16 by validator
+
+# ---------------------------------------------------------------------------
+# Defaults — per-repo settings inherit these when unspecified
+# ---------------------------------------------------------------------------
+defaults:
+  mode: dry-run                            # dry-run | draft-only | full
+  ci_watch_timeout_seconds: 1800           # 30 min — how long to wait for CI before timing out
+  diff_size_cap_lines: 200                 # Diffs larger than this force NEEDS_REVIEW
+  task_priority: cheap-first               # cheap-first | fifo | label-first
+  auto_merge_paths:                        # AUTO_MERGE_SAFE only when EVERY changed file matches one of these
+    - "*.md"
+    - "CHANGELOG*"
+    - "tests/**"
+    - "**/*_test.go"
+    - "**/*_test.py"
+    - "go.sum"
+  forced_review_paths:                     # Hard veto regardless of classification
+    - ".github/workflows/**"
+    - "**/migrations/**"
+
+# ---------------------------------------------------------------------------
+# Repos under management
+# ---------------------------------------------------------------------------
+# Per PLAN.md staged rollout: start every repo in `dry-run` for the first
+# night, promote to `draft-only` for a week, then `full`.
+repos:
+  - name: audiobook-organizer
+    owner: jdfalk
+    local_path: ~/repos/github.com/jdfalk/audiobook-organizer
+    mode: dry-run                          # ⬆ ratchet to draft-only / full once you've watched a clean night
+    test_command: "make ci"                # optional — auto-detected from Makefile if absent
+    ci_watch_timeout_seconds: 2700         # optional — overrides defaults.ci_watch_timeout_seconds
+    auto_merge_paths:                      # optional — narrows defaults.auto_merge_paths for this repo
+      - "*.md"
+      - "CHANGELOG*"
+    policy_overlay_path: ~/.burndown/policies/audiobook-organizer.toml  # optional — extra safe-ai-util narrowing

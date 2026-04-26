@@ -1,0 +1,49 @@
+# Example per-repo safe-ai-util policy overlay.
+#
+# This file is consumed by safe-ai-util's `--policy-overlay` flag (which
+# the burndown driver passes when spawning the safe-ai-util-mcp
+# subprocess for this repo). Every field is optional. The `--policy-overlay`
+# semantics are NARROW-ONLY — overlay can tighten the base allowlist
+# but never widen it; safe-ai-util rejects widening overlays at startup.
+#
+# See safe-ai-util's AllowlistOverlay docs:
+#   https://github.com/jdfalk/safe-ai-util/blob/main/src/security/allowlist.rs
+#
+# Pick the rules that make sense for THIS repo. Don't include this whole
+# file as-is — most projects only need 5-10 lines.
+
+# Force permissive_mode off (defensive even though it's already off in
+# the secure default).
+permissive_mode = false
+
+# A repo that doesn't use Python can drop python from the allowlist:
+#
+#   always_allowed = ["git", "make", "go", "gofmt", "node", "npm", "yarn"]
+#
+# A docs-only repo can be even tighter:
+#
+#   always_allowed = ["git", "make"]
+
+# Add bans on top of the base. Both of these are blocked by the base
+# already (sh, bash, curl, wget, sudo, etc.) — listing them here is
+# belt-and-suspenders for repos with strict ops requirements.
+blocked = [
+    "ssh",
+    "scp",
+    "rsync",
+]
+
+# Per-command tightening. Same schema as safe-ai-util's
+# AllowlistConfig.conditionally_allowed but only for commands that
+# already exist in the base.
+[conditionally_allowed.go]
+# Cap argument count and ban `go install` (no fetching arbitrary modules
+# at runtime — safe-ai-util-mcp's run_go_test/run_go_build/run_go_vet
+# wrappers don't need it).
+max_args = 10
+forbidden_args = ["install", "run", "tool"]
+
+[conditionally_allowed.npm]
+# Restrict to deterministic operations only.
+max_args = 5
+forbidden_args = ["install", "exec", "x", "publish"]

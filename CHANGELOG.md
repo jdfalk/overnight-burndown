@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 1 closing PR** — operator docs + sample configs. After this
+  the system is deployable in dry-run mode against audiobook-organizer.
+  - `README.md` rewritten as a real quickstart: install steps, GitHub App
+    setup with required scopes, dry-run-by-hand walkthrough, repo layout,
+    operating commands.
+  - `examples/config.yaml` — fully annotated sample with every key
+    documented inline.
+  - `examples/policies/audiobook-organizer.toml` — sample safe-ai-util
+    policy overlay showing common per-repo narrowing patterns.
+  - `examples/TODO.md` — sample TODO showing the `[auto-ok]` marker
+    syntax.
+  - `docs/PHASE-2-ROLLOUT.md` — staged-rollout playbook (dry-run → 7
+    days draft-only → full), including indicators-it's-working,
+    indicators-it's-not-working, and rollback procedure.
+  - Makefile `run` / `dry-run` targets now invoke `burndown run`
+    correctly (placeholder comments removed).
 - **Phase 1 orchestrator** — `internal/runner` + real `burndown run`
   subcommand. Wires every package together into the nightly cycle:
   acquire lock → for each repo (collect → triage → dispatch → ghops

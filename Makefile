@@ -79,13 +79,17 @@ status:
 	@printf "pause flag:    "; ls -l $(PAUSE_FILE) 2>/dev/null || echo "(none — running)"
 	@printf "burndown dir:  "; ls -ld $(BURNDOWN_DIR) 2>/dev/null || echo "(none — first run will create)"
 
-# ---- run targets (subcommands not yet wired; placeholders) ----
+# ---- run targets (one nightly cycle) ----
 
+# `make run` invokes the same entrypoint launchd does. Useful for
+# kicking off an off-schedule run by hand.
 run: build
-	$(BIN)
+	$(BIN) run
 
+# `make dry-run` overrides every repo's mode in the loaded config to
+# dry-run, then runs the cycle. Use this on night 1 of staged rollout.
 dry-run: build
-	$(BIN) --dry-run
+	$(BIN) run --dry-run
 
 help:
 	@echo "Targets:"
