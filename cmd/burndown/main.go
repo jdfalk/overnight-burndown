@@ -20,6 +20,8 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/openai/openai-go"
+	openaiOption "github.com/openai/openai-go/option"
 
 	"github.com/jdfalk/overnight-burndown/internal/agent"
 	"github.com/jdfalk/overnight-burndown/internal/config"
@@ -96,20 +98,31 @@ func cmdRun(args []string) int {
 		return 1
 	}
 
-	// Anthropic client uses the API key from the configured env var.
-	apiKey := os.Getenv(cfg.Anthropic.APIKeyEnv)
-	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "burndown: %s is not set\n", cfg.Anthropic.APIKeyEnv)
+	// Build provider clients on demand. The active providers are
+	// determined by `triage.provider` and `implementer.provider` in
+	// config; we only require credentials for the providers actually used.
+	providers, err := buildProviderClients(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "burndown:", err)
 		return 1
 	}
-	anthropicClient := anthropic.NewClient(option.WithAPIKey(apiKey))
 
+	// Pick the implementer agent runner based on config.implementer.provider.
+	runAgent, err := pickRunAgent(cfg, providers)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "burndown:", err)
+		return 1
+	}
+
+	// Runner.Anthropic is used by the dispatcher's Options for the Anthropic
+	// agent path. When the implementer is OpenAI, runAgent ignores Options.Client,
+	// so the field can remain zero.
 	r := &runner.Runner{
 		Config:    *cfg,
 		State:     st,
-		Anthropic: anthropicClient,
+		Anthropic: providers.anthropic,
 		SpawnMCP:  defaultSpawnMCP(cfg),
-		RunAgent:  agent.Run,
+		RunAgent:  runAgent,
 	}
 
 	res, err := r.Run(context.Background())
@@ -131,6 +144,83 @@ func defaultConfigPath() string {
 		return "burndown.yaml"
 	}
 	return filepath.Join(home, ".burndown", "config.yaml")
+}
+
+// providerClients is the per-provider SDK client bundle. Only the
+// clients actually used (per config.triage.provider / config.implementer.provider)
+// are initialized; anything left zero is fine.
+type providerClients struct {
+	anthropic   anthropic.Client
+	openai      openai.Client
+	openaiModel string // implementer model when provider=openai
+}
+
+// buildProviderClients inspects config and constructs the SDK clients for
+// every provider that's actually used. Missing credentials for unused
+// providers are tolerated (the validator already enforces credentials for
+// active providers).
+func buildProviderClients(cfg *config.Config) (*providerClients, error) {
+	out := &providerClients{}
+
+	usesAnthropic := cfg.Triage.Provider == config.ProviderAnthropic ||
+		cfg.Implementer.Provider == config.ProviderAnthropic
+	usesOpenAI := cfg.Triage.Provider == config.ProviderOpenAI ||
+		cfg.Implementer.Provider == config.ProviderOpenAI
+
+	if usesAnthropic {
+		key := os.Getenv(cfg.Anthropic.APIKeyEnv)
+		if key == "" {
+			return nil, fmt.Errorf("%s is not set (required by triage/implementer with provider=anthropic)", cfg.Anthropic.APIKeyEnv)
+		}
+		opts := []option.RequestOption{option.WithAPIKey(key)}
+		if cfg.Anthropic.BaseURL != "" {
+			opts = append(opts, option.WithBaseURL(cfg.Anthropic.BaseURL))
+		}
+		out.anthropic = anthropic.NewClient(opts...)
+	}
+	if usesOpenAI {
+		key := os.Getenv(cfg.OpenAI.APIKeyEnv)
+		if key == "" {
+			return nil, fmt.Errorf("%s is not set (required by triage/implementer with provider=openai)", cfg.OpenAI.APIKeyEnv)
+		}
+		opts := []openaiOption.RequestOption{openaiOption.WithAPIKey(key)}
+		if cfg.OpenAI.BaseURL != "" {
+			opts = append(opts, openaiOption.WithBaseURL(cfg.OpenAI.BaseURL))
+		}
+		out.openai = openai.NewClient(opts...)
+	}
+	if cfg.Implementer.Provider == config.ProviderOpenAI {
+		out.openaiModel = cfg.Implementer.Model
+	}
+	return out, nil
+}
+
+// pickRunAgent returns the dispatch.RunAgentFunc for the active
+// implementer provider. The Anthropic path uses agent.Run; the OpenAI
+// path closes over the OpenAI client + model and ignores the Anthropic
+// fields on agent.Options.
+func pickRunAgent(cfg *config.Config, providers *providerClients) (dispatch.RunAgentFunc, error) {
+	switch cfg.Implementer.Provider {
+	case config.ProviderOpenAI:
+		client := providers.openai
+		model := providers.openaiModel
+		return func(ctx context.Context, opts agent.Options) (*agent.Result, error) {
+			return agent.RunOpenAI(ctx, client, model, opts)
+		}, nil
+	case config.ProviderAnthropic:
+		// agent.Run reads opts.Client and opts.Model that the dispatcher
+		// fills from runner.Anthropic and config.Implementer.Model.
+		// Override Model on Options here so it matches Implementer.Model
+		// regardless of what the dispatcher fills in (the dispatcher
+		// currently uses Anthropic.ImplementerModel for legacy reasons).
+		model := anthropic.Model(cfg.Implementer.Model)
+		return func(ctx context.Context, opts agent.Options) (*agent.Result, error) {
+			opts.Model = model
+			return agent.Run(ctx, opts)
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown implementer.provider: %q", cfg.Implementer.Provider)
+	}
 }
 
 // defaultSpawnMCP returns a SpawnMCPFunc that launches safe-ai-util-mcp

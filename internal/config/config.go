@@ -86,23 +86,67 @@ var validPriorities = map[Priority]struct{}{
 }
 
 // Config is the top-level YAML schema.
+//
+// LLM-provider selection: each LLM-using feature (triage, implementer agent)
+// picks its provider via its own block (`triage.provider`, `implementer.provider`).
+// The provider's credentials live under `anthropic` or `openai` at the top
+// level. A config can use Anthropic for one feature and OpenAI for the other;
+// missing credentials for unused providers are tolerated.
+//
+// The legacy `anthropic.{triage_model,implementer_model}` shape from before the
+// pluggable-providers refactor is still recognized — when `triage` /
+// `implementer` blocks are absent the loader falls back to the legacy fields,
+// using "anthropic" as the implicit provider.
 type Config struct {
-	Anthropic   AnthropicConfig   `yaml:"anthropic"`
-	GitHub      GitHubConfig      `yaml:"github"`
-	Paths       PathsConfig       `yaml:"paths"`
-	Budget      BudgetConfig      `yaml:"budget"`
-	Concurrency ConcurrencyConfig `yaml:"concurrency"`
-	Defaults    Defaults          `yaml:"defaults"`
-	Repos       []RepoConfig      `yaml:"repos"`
+	Anthropic   AnthropicConfig    `yaml:"anthropic"`
+	OpenAI      OpenAIConfig       `yaml:"openai"`
+	Triage      LLMFeatureConfig   `yaml:"triage"`
+	Implementer LLMFeatureConfig   `yaml:"implementer"`
+	GitHub      GitHubConfig       `yaml:"github"`
+	Paths       PathsConfig        `yaml:"paths"`
+	Budget      BudgetConfig       `yaml:"budget"`
+	Concurrency ConcurrencyConfig  `yaml:"concurrency"`
+	Defaults    Defaults           `yaml:"defaults"`
+	Repos       []RepoConfig       `yaml:"repos"`
 }
 
-// AnthropicConfig is the LLM provider settings.
+// AnthropicConfig holds Anthropic credentials + the legacy model fields.
+//
+// `TriageModel` / `ImplementerModel` are deprecated — supply per-feature
+// blocks (`triage`, `implementer`) instead. They are preserved here so
+// existing configs keep working without edits.
 type AnthropicConfig struct {
-	TriageModel      string `yaml:"triage_model"`
-	ImplementerModel string `yaml:"implementer_model"`
-	// APIKeyEnv is the name of the env var holding the API key. The validator
-	// checks that the name is set; the runtime checks that the var is populated.
 	APIKeyEnv string `yaml:"api_key_env"`
+	BaseURL   string `yaml:"base_url,omitempty"`
+
+	TriageModel      string `yaml:"triage_model,omitempty"`      // Deprecated: use triage.model
+	ImplementerModel string `yaml:"implementer_model,omitempty"` // Deprecated: use implementer.model
+}
+
+// OpenAIConfig holds OpenAI / OpenAI-compatible credentials.
+//
+// BaseURL lets users point at any compatible endpoint (Azure OpenAI,
+// OpenRouter, a self-hosted vLLM gateway, etc.) — the openai-go SDK
+// honors it transparently.
+type OpenAIConfig struct {
+	APIKeyEnv string `yaml:"api_key_env"`
+	BaseURL   string `yaml:"base_url,omitempty"`
+}
+
+// ProviderName identifies which LLM backend a feature should use.
+type ProviderName string
+
+const (
+	ProviderAnthropic ProviderName = "anthropic"
+	ProviderOpenAI    ProviderName = "openai"
+)
+
+// LLMFeatureConfig picks an LLM provider + model for one feature
+// (triage or implementer agent). Both fields are required when this
+// block is present.
+type LLMFeatureConfig struct {
+	Provider ProviderName `yaml:"provider"`
+	Model    string       `yaml:"model"`
 }
 
 // GitHubConfig holds App-based authentication settings. All three fields are
@@ -226,7 +270,10 @@ func expandTilde(p, home string) string {
 	return p
 }
 
-// applyDefaults fills repo fields from c.Defaults when left zero.
+// applyDefaults fills repo fields from c.Defaults when left zero, and
+// fills the Triage/Implementer feature blocks from the legacy Anthropic
+// fields when the new blocks are absent.
+//
 // Doesn't touch GitHub auth, paths, or budget — those have no per-repo override.
 func (c *Config) applyDefaults() {
 	for i := range c.Repos {
@@ -241,6 +288,17 @@ func (c *Config) applyDefaults() {
 			r.AutoMergePaths = append([]string(nil), c.Defaults.AutoMergePaths...)
 		}
 	}
+
+	// Legacy fallback: fill Triage from anthropic.triage_model.
+	if c.Triage.Provider == "" && c.Anthropic.TriageModel != "" {
+		c.Triage.Provider = ProviderAnthropic
+		c.Triage.Model = c.Anthropic.TriageModel
+	}
+	// Legacy fallback: fill Implementer from anthropic.implementer_model.
+	if c.Implementer.Provider == "" && c.Anthropic.ImplementerModel != "" {
+		c.Implementer.Provider = ProviderAnthropic
+		c.Implementer.Model = c.Anthropic.ImplementerModel
+	}
 }
 
 // Validate checks required fields, enum values, and cross-field invariants.
@@ -248,15 +306,39 @@ func (c *Config) applyDefaults() {
 func (c *Config) Validate() error {
 	var errs []error
 
-	// --- anthropic ---
-	if c.Anthropic.TriageModel == "" {
-		errs = append(errs, errors.New("anthropic.triage_model: required"))
+	// --- LLM features (triage + implementer) ---
+	for _, fc := range []struct {
+		name string
+		f    LLMFeatureConfig
+	}{
+		{"triage", c.Triage},
+		{"implementer", c.Implementer},
+	} {
+		if fc.f.Provider == "" {
+			errs = append(errs, fmt.Errorf("%s.provider: required (one of: anthropic, openai)", fc.name))
+			continue
+		}
+		switch fc.f.Provider {
+		case ProviderAnthropic, ProviderOpenAI:
+			// fine
+		default:
+			errs = append(errs, fmt.Errorf("%s.provider: must be 'anthropic' or 'openai', got %q", fc.name, fc.f.Provider))
+			continue
+		}
+		if fc.f.Model == "" {
+			errs = append(errs, fmt.Errorf("%s.model: required when provider is set", fc.name))
+		}
 	}
-	if c.Anthropic.ImplementerModel == "" {
-		errs = append(errs, errors.New("anthropic.implementer_model: required"))
+
+	// --- provider credentials: required if either feature uses that provider ---
+	usesAnthropic := c.Triage.Provider == ProviderAnthropic || c.Implementer.Provider == ProviderAnthropic
+	usesOpenAI := c.Triage.Provider == ProviderOpenAI || c.Implementer.Provider == ProviderOpenAI
+
+	if usesAnthropic && c.Anthropic.APIKeyEnv == "" {
+		errs = append(errs, errors.New("anthropic.api_key_env: required when triage or implementer uses provider=anthropic"))
 	}
-	if c.Anthropic.APIKeyEnv == "" {
-		errs = append(errs, errors.New("anthropic.api_key_env: required (env-var name, not the key itself)"))
+	if usesOpenAI && c.OpenAI.APIKeyEnv == "" {
+		errs = append(errs, errors.New("openai.api_key_env: required when triage or implementer uses provider=openai"))
 	}
 
 	// --- paths ---

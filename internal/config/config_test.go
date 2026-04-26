@@ -167,9 +167,13 @@ func TestValidate_RejectsBadValues(t *testing.T) {
 		wantSub string // substring expected somewhere in the joined error
 	}{
 		{
-			"empty triage_model",
+			// Removing the model leaves both legacy `anthropic.triage_model`
+			// and the (absent) `triage:` block empty, so applyDefaults can't
+			// derive a triage provider — Validate now reports the missing
+			// `triage.provider` field instead of the legacy "triage_model".
+			"empty triage_model fall through",
 			func(s string) string { return strings.Replace(s, "claude-opus-4-7", "", 1) },
-			"triage_model",
+			"triage.provider",
 		},
 		{
 			"empty api_key_env",
