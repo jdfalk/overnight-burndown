@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/render-ci-config.py
-# version: 1.0.1
+# version: 1.0.2
 """Emit a burndown config.yaml from environment variables.
 
 Replaces a fragile nested-bash-heredoc rendering step. All inputs come

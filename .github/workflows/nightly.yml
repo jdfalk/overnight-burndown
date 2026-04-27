@@ -1,5 +1,5 @@
 # file: .github/workflows/nightly.yml
-# version: 1.0.1
+# version: 1.0.2
 
 name: Nightly burndown
 
@@ -53,23 +53,23 @@ jobs:
 
       - name: Materialize GitHub App private key
         env:
-          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          BURNDOWN_BOT_PRIVATE_KEY: ${{ secrets.BURNDOWN_BOT_PRIVATE_KEY }}
         run: |
-          if [ -z "$GH_APP_PRIVATE_KEY" ]; then
-            echo "No GH_APP_PRIVATE_KEY secret configured — running in dry-run-only mode."
+          if [ -z "$BURNDOWN_BOT_PRIVATE_KEY" ]; then
+            echo "No BURNDOWN_BOT_PRIVATE_KEY secret configured — running in dry-run-only mode."
             exit 0
           fi
           mkdir -p "$RUNNER_TEMP/keys"
           chmod 700 "$RUNNER_TEMP/keys"
-          printf '%s\n' "$GH_APP_PRIVATE_KEY" > "$RUNNER_TEMP/keys/burndown-bot.pem"
+          printf '%s\n' "$BURNDOWN_BOT_PRIVATE_KEY" > "$RUNNER_TEMP/keys/burndown-bot.pem"
           chmod 600 "$RUNNER_TEMP/keys/burndown-bot.pem"
 
       - name: Render config
         env:
           MODE: ${{ inputs.mode || 'dry-run' }}
           WORKSPACE: ${{ github.workspace }}
-          GH_APP_ID: ${{ secrets.GH_APP_ID }}
-          GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          GH_APP_ID: ${{ secrets.BURNDOWN_BOT_APP_ID }}
+          GH_APP_INSTALLATION_ID: ${{ secrets.BURNDOWN_BOT_INSTALLATION_ID }}
           GH_APP_PEM_PATH: ${{ runner.temp }}/keys/burndown-bot.pem
         run: |
           mkdir -p "$RUNNER_TEMP/burndown-state" "$RUNNER_TEMP/burndown-digest"
