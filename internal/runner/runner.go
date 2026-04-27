@@ -155,6 +155,8 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 		MergedBranches: map[string]bool{},
 	}
 
+	var lastErr error
+	succeeded := 0
 	for _, repoCfg := range r.Config.Repos {
 		if abort, _ := b.ShouldAbort(); abort {
 			// Anything we haven't processed gets requeued from state on
@@ -163,10 +165,13 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 		}
 		repoResult, err := r.runRepo(ctx, repoCfg, t, b)
 		if err != nil {
-			// Per-repo errors are logged but don't kill the night.
+			// Per-repo errors are logged but don't kill the night unless
+			// every repo fails (e.g. invalid API key).
 			fmt.Fprintf(os.Stderr, "runner: %s/%s: %v\n", repoCfg.Owner, repoCfg.Name, err)
+			lastErr = err
 			continue
 		}
+		succeeded++
 		result.Outcomes = append(result.Outcomes, repoResult.Outcomes...)
 		for k, v := range repoResult.PRs {
 			result.PRs[k] = v
@@ -196,6 +201,9 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 		fmt.Fprintf(os.Stderr, "runner: save state: %v\n", err)
 	}
 
+	if succeeded == 0 && lastErr != nil {
+		return result, fmt.Errorf("runner: all repos failed; last error: %w", lastErr)
+	}
 	return result, nil
 }
 

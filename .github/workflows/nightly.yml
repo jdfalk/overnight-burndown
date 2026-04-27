@@ -1,5 +1,5 @@
 # file: .github/workflows/nightly.yml
-# version: 1.0.2
+# version: 1.0.3
 
 name: Nightly burndown
 
@@ -38,6 +38,23 @@ jobs:
           repository: jdfalk/audiobook-organizer
           path: targets/audiobook-organizer
           fetch-depth: 1
+
+      - name: Validate secrets
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::OPENAI_API_KEY secret is not set — add it at Settings → Secrets → Actions"
+            exit 1
+          fi
+          http_code=$(curl -sf -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            https://api.openai.com/v1/models)
+          if [ "$http_code" != "200" ]; then
+            echo "::error::OPENAI_API_KEY is invalid or quota exceeded (HTTP $http_code) — regenerate at platform.openai.com/api-keys"
+            exit 1
+          fi
+          echo "OPENAI_API_KEY validated (HTTP 200)"
 
       - name: Set up Go
         uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
