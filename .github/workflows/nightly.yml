@@ -70,64 +70,19 @@ jobs:
           WORKSPACE: ${{ github.workspace }}
           GH_APP_ID: ${{ secrets.GH_APP_ID }}
           GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          GH_APP_PEM_PATH: ${{ runner.temp }}/keys/burndown-bot.pem
         run: |
           mkdir -p "$RUNNER_TEMP/burndown-state" "$RUNNER_TEMP/burndown-digest"
-          {
-            cat <<EOF
-          openai:
-            api_key_env: OPENAI_API_KEY
-
-          triage:
-            provider: openai
-            model: gpt-5
-
-          implementer:
-            provider: openai
-            model: gpt-5
-
-          paths:
-            state_dir: $RUNNER_TEMP/burndown-state
-            worktree_root: $RUNNER_TEMP/burndown-state/worktrees
-            digest_dir: $RUNNER_TEMP/burndown-digest
-            audit_dir: $RUNNER_TEMP/burndown-state/audit
-            log_dir: $RUNNER_TEMP/burndown-state/logs
-
-          budget:
-            max_dollars: 5.0
-            max_wall_seconds: 3000
-            abort_threshold: 0.8
-
-          concurrency:
-            max_parallel_agents: 4
-
-          defaults:
-            mode: $MODE
-            ci_watch_timeout_seconds: 1800
-            diff_size_cap_lines: 200
-            task_priority: cheap-first
-            auto_merge_paths:
-              - "*.md"
-            forced_review_paths:
-              - ".github/workflows/**"
-          EOF
-            if [ -n "$GH_APP_ID" ] && [ -n "$GH_APP_INSTALLATION_ID" ]; then
-              cat <<EOF
-
-          github:
-            app_id: $GH_APP_ID
-            installation_id: $GH_APP_INSTALLATION_ID
-            private_key_path: $RUNNER_TEMP/keys/burndown-bot.pem
-          EOF
-            fi
-            cat <<EOF
-
-          repos:
-            - name: audiobook-organizer
-              owner: jdfalk
-              local_path: $WORKSPACE/targets/audiobook-organizer
-              mode: $MODE
-          EOF
-          } > "$RUNNER_TEMP/config.yaml"
+          # If the PEM wasn't materialized, blank the App env so the renderer
+          # omits the github: block (config validator only requires it when
+          # any repo is non-dry-run).
+          if [ ! -s "$GH_APP_PEM_PATH" ]; then
+            unset GH_APP_ID GH_APP_INSTALLATION_ID GH_APP_PEM_PATH
+          fi
+          python3 burndown/scripts/render-ci-config.py --out "$RUNNER_TEMP/config.yaml" >/dev/null
+          echo "::group::Rendered config.yaml"
+          cat "$RUNNER_TEMP/config.yaml"
+          echo "::endgroup::"
 
       - name: Run burndown
         env:
