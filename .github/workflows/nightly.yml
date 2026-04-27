@@ -1,5 +1,5 @@
 # file: .github/workflows/nightly.yml
-# version: 1.0.0
+# version: 1.0.1
 
 name: Nightly burndown
 
@@ -83,6 +83,10 @@ jobs:
           echo "::group::Rendered config.yaml"
           cat "$RUNNER_TEMP/config.yaml"
           echo "::endgroup::"
+
+      - name: Validate config (Python YAML + line dump)
+        run: |
+          python3 burndown/scripts/validate-config.py "$RUNNER_TEMP/config.yaml"
 
       - name: Run burndown
         env:
