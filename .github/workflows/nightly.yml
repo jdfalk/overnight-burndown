@@ -1,5 +1,5 @@
 # file: .github/workflows/nightly.yml
-# version: 1.0.3
+# version: 1.0.4
 
 name: Nightly burndown
 
@@ -41,7 +41,7 @@ jobs:
 
       - name: Validate secrets
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.BURNDOWN_BOT_OPENAI_API_KEY }}
         run: |
           if [ -z "$OPENAI_API_KEY" ]; then
             echo "::error::OPENAI_API_KEY secret is not set — add it at Settings → Secrets → Actions"
@@ -107,7 +107,7 @@ jobs:
 
       - name: Run burndown
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.BURNDOWN_BOT_OPENAI_API_KEY }}
         run: |
           "$RUNNER_TEMP/burndown" run --config "$RUNNER_TEMP/config.yaml"
 
