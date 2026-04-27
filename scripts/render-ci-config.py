@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/render-ci-config.py
-# version: 1.0.0
+# version: 1.0.1
 """Emit a burndown config.yaml from environment variables.
 
 Replaces a fragile nested-bash-heredoc rendering step. All inputs come
@@ -68,10 +68,8 @@ defaults:
   ci_watch_timeout_seconds: 1800
   diff_size_cap_lines: 200
   task_priority: cheap-first
-  auto_merge_paths:
-    - "*.md"
-  forced_review_paths:
-    - ".github/workflows/**"
+  auto_merge_paths: ["*.md"]
+  forced_review_paths: [".github/workflows/**"]
 """
     ]
 
