@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/setup-burndown-app.py
-# version: 1.0.0
+# version: 1.0.1
 """Bootstrap the burndown-bot GitHub App via the manifest flow.
 
 End-to-end:
@@ -201,10 +201,12 @@ def main() -> int:
         return 1
 
     # Step 5 — emit secrets.
+    # Secret names are prefixed with BURNDOWN_BOT_ to avoid collisions with
+    # other GitHub App credentials that may live in the same repo's secrets.
     out = {
-        "GH_APP_ID": str(app_id),
-        "GH_APP_INSTALLATION_ID": str(install_id),
-        "GH_APP_PRIVATE_KEY": pem,
+        "BURNDOWN_BOT_APP_ID": str(app_id),
+        "BURNDOWN_BOT_INSTALLATION_ID": str(install_id),
+        "BURNDOWN_BOT_PRIVATE_KEY": pem,
         "_app_slug": slug,
         "_app_html_url": conversion["html_url"],
     }
