@@ -1,0 +1,141 @@
+# file: .github/workflows/nightly.yml
+# version: 1.0.0
+
+name: Nightly burndown
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # 08:00 UTC = 01:00 PT / 04:00 ET
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode (overrides config). dry-run is the only safe default until App creds are wired.'
+        required: false
+        default: 'dry-run'
+        type: choice
+        options:
+          - dry-run
+          - draft-only
+          - full
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: triage + dry-run digest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout overnight-burndown
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          path: burndown
+
+      - name: Checkout audiobook-organizer (target repo)
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: jdfalk/audiobook-organizer
+          path: targets/audiobook-organizer
+          fetch-depth: 1
+
+      - name: Set up Go
+        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        with:
+          go-version: '1.25'
+          check-latest: true
+          cache: true
+          cache-dependency-path: burndown/go.sum
+
+      - name: Build burndown
+        working-directory: burndown
+        run: go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown
+
+      - name: Materialize GitHub App private key
+        if: ${{ secrets.GH_APP_PRIVATE_KEY != '' }}
+        env:
+          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          chmod 700 "$RUNNER_TEMP/keys"
+          printf '%s\n' "$GH_APP_PRIVATE_KEY" > "$RUNNER_TEMP/keys/burndown-bot.pem"
+          chmod 600 "$RUNNER_TEMP/keys/burndown-bot.pem"
+
+      - name: Render config
+        env:
+          MODE: ${{ inputs.mode || 'dry-run' }}
+          WORKSPACE: ${{ github.workspace }}
+          GH_APP_ID: ${{ secrets.GH_APP_ID }}
+          GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/burndown-state" "$RUNNER_TEMP/burndown-digest"
+          {
+            cat <<EOF
+          openai:
+            api_key_env: OPENAI_API_KEY
+
+          triage:
+            provider: openai
+            model: gpt-5
+
+          implementer:
+            provider: openai
+            model: gpt-5
+
+          paths:
+            state_dir: $RUNNER_TEMP/burndown-state
+            worktree_root: $RUNNER_TEMP/burndown-state/worktrees
+            digest_dir: $RUNNER_TEMP/burndown-digest
+            audit_dir: $RUNNER_TEMP/burndown-state/audit
+            log_dir: $RUNNER_TEMP/burndown-state/logs
+
+          budget:
+            max_dollars: 5.0
+            max_wall_seconds: 3000
+            abort_threshold: 0.8
+
+          concurrency:
+            max_parallel_agents: 4
+
+          defaults:
+            mode: $MODE
+            ci_watch_timeout_seconds: 1800
+            diff_size_cap_lines: 200
+            task_priority: cheap-first
+            auto_merge_paths:
+              - "*.md"
+            forced_review_paths:
+              - ".github/workflows/**"
+          EOF
+            if [ -n "$GH_APP_ID" ] && [ -n "$GH_APP_INSTALLATION_ID" ]; then
+              cat <<EOF
+
+          github:
+            app_id: $GH_APP_ID
+            installation_id: $GH_APP_INSTALLATION_ID
+            private_key_path: $RUNNER_TEMP/keys/burndown-bot.pem
+          EOF
+            fi
+            cat <<EOF
+
+          repos:
+            - name: audiobook-organizer
+              owner: jdfalk
+              local_path: $WORKSPACE/targets/audiobook-organizer
+              mode: $MODE
+          EOF
+          } > "$RUNNER_TEMP/config.yaml"
+
+      - name: Run burndown
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: "$RUNNER_TEMP/burndown" run --config "$RUNNER_TEMP/config.yaml"
+
+      - name: Upload digest
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: burndown-digest-${{ github.run_id }}
+          path: ${{ runner.temp }}/burndown-digest/
+          if-no-files-found: warn
+          retention-days: 30
