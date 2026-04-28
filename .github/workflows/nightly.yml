@@ -1,24 +1,31 @@
 # file: .github/workflows/nightly.yml
-# version: 1.2.0
+# version: 2.0.0
 #
-# Single-runner nightly burndown. The matrix-per-task split is a follow-up
-# (needs new `triage` / `dispatch-one` / `aggregate` burndown subcommands).
+# Three-phase matrix burndown:
 #
-# Runtime tools (gh CLI, Go, Python, safe-ai-util, safe-ai-util-mcp) live in
-# ghcr.io/jdfalk/burndown-runner-image — a public image so no GHCR auth is
-# needed. Pin the digest below to avoid surprise tool drift mid-night; bump
-# it deliberately when the burndown-runner-image build workflow ships a new
-# layer.
+#   triage    → 1 runner. collect+triage every repo, emit tasks.json
+#   dispatch  → 1 runner per task (matrix), worktree+agent+ghops
+#   aggregate → 1 runner. concatenate outcomes, render digest
+#
+# Each phase uses ghcr.io/jdfalk/burndown-runner-image (public, no auth).
+# `triage` writes tasks.json + uploads it as an artifact; `dispatch` uses
+# fromJson(needs.triage.outputs.task_indices) to fan out one cell per
+# task index. `aggregate` always runs (even if some dispatch cells fail)
+# and downloads every outcome-*.json artifact to render a unified digest.
+#
+# The legacy single-runner Runner.Run() entry point is still on the
+# binary (`burndown run`) for ad-hoc local use; this workflow uses only
+# the matrix subcommands.
 
 name: Nightly burndown
 
 on:
   schedule:
-    - cron: '0 8 * * *'  # 08:00 UTC = 01:00 PT / 04:00 ET
+    - cron: '0 8 * * *' # 08:00 UTC = 01:00 PT / 04:00 ET
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run mode (overrides config). dry-run is the only safe default until App creds are wired.'
+        description: 'Run mode (overrides config). dry-run is the safe default.'
         required: false
         default: 'dry-run'
         type: choice
@@ -30,24 +37,31 @@ on:
 permissions:
   contents: read
 
+env:
+  RUNNER_IMAGE: ghcr.io/jdfalk/burndown-runner-image:latest
+
 jobs:
-  run:
-    name: triage + dry-run digest
+  # ---------------------------------------------------------------------------
+  # Phase 1: Triage — one runner, emits tasks.json + a list of indices the
+  # matrix will fan out on.
+  # ---------------------------------------------------------------------------
+  triage:
+    name: Triage + emit task list
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
     container:
-      # Public image — no credentials block needed. The :latest tag is the
-      # scaffold default; production should pin to @sha256:... and rotate
-      # via a dependabot rule on the burndown-runner-image repo.
       image: ghcr.io/jdfalk/burndown-runner-image:latest
+    outputs:
+      task_indices: ${{ steps.emit.outputs.task_indices }}
+      task_count: ${{ steps.emit.outputs.task_count }}
     steps:
       - name: Checkout overnight-burndown
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: burndown
 
-      - name: Checkout audiobook-organizer (target repo, sparse — excludes testdata/audio)
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Checkout audiobook-organizer (sparse)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: jdfalk/audiobook-organizer
           path: targets/audiobook-organizer
@@ -62,37 +76,26 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.BURNDOWN_BOT_OPENAI_API_KEY }}
         run: |
           if [ -z "$OPENAI_API_KEY" ]; then
-            echo "::error::OPENAI_API_KEY secret is not set — add it at Settings → Secrets → Actions"
+            echo "::error::OPENAI_API_KEY secret is not set"
             exit 1
           fi
           http_code=$(curl -sf -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            https://api.openai.com/v1/models)
+            -H "Authorization: Bearer $OPENAI_API_KEY" https://api.openai.com/v1/models)
           if [ "$http_code" != "200" ]; then
-            echo "::error::OPENAI_API_KEY is invalid or quota exceeded (HTTP $http_code) — regenerate at platform.openai.com/api-keys"
+            echo "::error::OPENAI_API_KEY rejected (HTTP $http_code)"
             exit 1
           fi
-          echo "OPENAI_API_KEY validated (HTTP 200)"
-
-      - name: Verify image tooling
-        run: |
-          set -eux
-          go version
-          python3 --version
-          gh --version
-          safe-ai-util --version
-          safe-ai-util-mcp --help >/dev/null 2>&1 || true
 
       - name: Build burndown
         working-directory: burndown
         run: go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown
 
-      - name: Materialize GitHub App private key
+      - name: Materialize GitHub App key
         env:
           BURNDOWN_BOT_PRIVATE_KEY: ${{ secrets.BURNDOWN_BOT_PRIVATE_KEY }}
         run: |
           if [ -z "$BURNDOWN_BOT_PRIVATE_KEY" ]; then
-            echo "No BURNDOWN_BOT_PRIVATE_KEY secret configured — running in dry-run-only mode."
+            echo "No App key — running in dry-run-only mode."
             exit 0
           fi
           mkdir -p "$RUNNER_TEMP/keys"
@@ -109,30 +112,177 @@ jobs:
           GH_APP_PEM_PATH: ${{ runner.temp }}/keys/burndown-bot.pem
         run: |
           mkdir -p "$RUNNER_TEMP/burndown-state" "$RUNNER_TEMP/burndown-digest"
-          # If the PEM wasn't materialized, blank the App env so the renderer
-          # omits the github: block (config validator only requires it when
-          # any repo is non-dry-run).
           if [ ! -s "$GH_APP_PEM_PATH" ]; then
             unset GH_APP_ID GH_APP_INSTALLATION_ID GH_APP_PEM_PATH
           fi
           python3 burndown/scripts/render-ci-config.py --out "$RUNNER_TEMP/config.yaml" >/dev/null
-          echo "::group::Rendered config.yaml"
-          cat "$RUNNER_TEMP/config.yaml"
-          echo "::endgroup::"
-
-      - name: Validate config (Python YAML + line dump)
-        run: |
           python3 burndown/scripts/validate-config.py "$RUNNER_TEMP/config.yaml"
 
-      - name: Run burndown
+      - name: Run triage
         env:
           OPENAI_API_KEY: ${{ secrets.BURNDOWN_BOT_OPENAI_API_KEY }}
         run: |
-          "$RUNNER_TEMP/burndown" run --config "$RUNNER_TEMP/config.yaml"
+          "$RUNNER_TEMP/burndown" triage \
+            --config "$RUNNER_TEMP/config.yaml" \
+            --out "$RUNNER_TEMP/tasks.json"
+
+      - name: Upload tasks.json + config + state
+        uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a # v4.3.6
+        with:
+          name: burndown-triage
+          path: |
+            ${{ runner.temp }}/tasks.json
+            ${{ runner.temp }}/config.yaml
+            ${{ runner.temp }}/burndown-state/state.json
+          retention-days: 7
+
+      - name: Emit task indices for matrix fanout
+        id: emit
+        run: |
+          set -eu
+          # GitHub Actions matrix has a 256-cell cap; we fan out on
+          # array indices, not whole task objects, both to stay under
+          # the cap and to keep job names readable.
+          count=$(jq '.tasks | length' "$RUNNER_TEMP/tasks.json")
+          if [ "$count" -gt 256 ]; then
+            echo "::warning::triage produced $count tasks, capping matrix at 256"
+            count=256
+          fi
+          if [ "$count" -eq 0 ]; then
+            indices='[]'
+          else
+            indices=$(jq -cn --argjson n "$count" '[range(0; $n)]')
+          fi
+          echo "task_count=$count" >> "$GITHUB_OUTPUT"
+          echo "task_indices=$indices" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # Phase 2: Dispatch — one runner per task. The matrix is gated on the
+  # triage job producing at least one dispatchable task.
+  # ---------------------------------------------------------------------------
+  dispatch:
+    name: Dispatch task
+    needs: triage
+    if: needs.triage.outputs.task_count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/jdfalk/burndown-runner-image:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        index: ${{ fromJson(needs.triage.outputs.task_indices) }}
+    steps:
+      - name: Checkout overnight-burndown
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: burndown
+
+      - name: Checkout audiobook-organizer (sparse)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: jdfalk/audiobook-organizer
+          path: targets/audiobook-organizer
+          fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/testdata/audio/
+          sparse-checkout-cone-mode: false
+
+      - name: Build burndown
+        working-directory: burndown
+        run: go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown
+
+      - name: Download triage artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: burndown-triage
+          path: ${{ runner.temp }}/triage
+
+      - name: Stage triage outputs
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/burndown-state"
+          cp "$RUNNER_TEMP/triage/config.yaml" "$RUNNER_TEMP/config.yaml"
+          cp "$RUNNER_TEMP/triage/tasks.json" "$RUNNER_TEMP/tasks.json"
+          cp "$RUNNER_TEMP/triage/state.json" "$RUNNER_TEMP/burndown-state/state.json" || true
+
+      - name: Materialize GitHub App key (per-cell)
+        env:
+          BURNDOWN_BOT_PRIVATE_KEY: ${{ secrets.BURNDOWN_BOT_PRIVATE_KEY }}
+        run: |
+          [ -z "$BURNDOWN_BOT_PRIVATE_KEY" ] && exit 0
+          mkdir -p "$RUNNER_TEMP/keys" && chmod 700 "$RUNNER_TEMP/keys"
+          printf '%s\n' "$BURNDOWN_BOT_PRIVATE_KEY" > "$RUNNER_TEMP/keys/burndown-bot.pem"
+          chmod 600 "$RUNNER_TEMP/keys/burndown-bot.pem"
+
+      - name: Dispatch task ${{ matrix.index }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.BURNDOWN_BOT_OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.BURNDOWN_BOT_ANTHROPIC_API_KEY }}
+        run: |
+          "$RUNNER_TEMP/burndown" dispatch-one \
+            --config "$RUNNER_TEMP/config.yaml" \
+            --task-file "$RUNNER_TEMP/tasks.json" \
+            --task-index ${{ matrix.index }} \
+            --out "$RUNNER_TEMP/outcome-${{ matrix.index }}.json"
+
+      - name: Upload outcome
+        if: always()
+        uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a # v4.3.6
+        with:
+          name: burndown-outcome-${{ matrix.index }}
+          path: ${{ runner.temp }}/outcome-${{ matrix.index }}.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Phase 3: Aggregate — runs even if some dispatch cells failed, so the
+  # digest always reports the full picture.
+  # ---------------------------------------------------------------------------
+  aggregate:
+    name: Aggregate digest
+    needs: [triage, dispatch]
+    if: always() && needs.triage.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: ghcr.io/jdfalk/burndown-runner-image:latest
+    steps:
+      - name: Checkout overnight-burndown
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: burndown
+
+      - name: Build burndown
+        working-directory: burndown
+        run: go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown
+
+      - name: Download triage artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: burndown-triage
+          path: ${{ runner.temp }}/triage
+
+      - name: Download every outcome artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          pattern: burndown-outcome-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/outcomes
+
+      - name: Aggregate
+        run: |
+          mkdir -p "$RUNNER_TEMP/burndown-digest"
+          "$RUNNER_TEMP/burndown" aggregate \
+            --config "$RUNNER_TEMP/triage/config.yaml" \
+            --triage-file "$RUNNER_TEMP/triage/tasks.json" \
+            --outcomes-dir "$RUNNER_TEMP/outcomes" \
+            --digest-out "$RUNNER_TEMP/burndown-digest/digest.md"
 
       - name: Upload digest
         if: always()
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a # v4.3.6
         with:
           name: burndown-digest-${{ github.run_id }}
           path: ${{ runner.temp }}/burndown-digest/
