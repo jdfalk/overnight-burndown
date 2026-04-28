@@ -40,6 +40,12 @@ func main() {
 			return
 		case "run":
 			os.Exit(cmdRun(os.Args[2:]))
+		case "triage":
+			os.Exit(cmdTriage(os.Args[2:]))
+		case "dispatch-one":
+			os.Exit(cmdDispatchOne(os.Args[2:]))
+		case "aggregate":
+			os.Exit(cmdAggregate(os.Args[2:]))
 		case "--help", "-h", "help":
 			printHelp()
 			return
@@ -62,11 +68,14 @@ func printHelp() {
 	fmt.Fprintln(os.Stderr, "Usage: burndown <subcommand> [flags]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Subcommands:")
-	fmt.Fprintln(os.Stderr, "  run             Execute one nightly cycle")
+	fmt.Fprintln(os.Stderr, "  run             Execute one nightly cycle (single-runner)")
+	fmt.Fprintln(os.Stderr, "  triage          Matrix mode: emit task JSON for fan-out")
+	fmt.Fprintln(os.Stderr, "  dispatch-one    Matrix mode: dispatch one task from triage JSON")
+	fmt.Fprintln(os.Stderr, "  aggregate       Matrix mode: combine outcomes into a digest")
 	fmt.Fprintln(os.Stderr, "  --version, -v   Print version and exit")
 	fmt.Fprintln(os.Stderr, "  --help, -h      Show this help")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "  burndown run --help   Subcommand-specific flags")
+	fmt.Fprintln(os.Stderr, "  burndown <subcommand> --help   Subcommand-specific flags")
 }
 
 // cmdRun parses `run` flags and executes one nightly cycle.
