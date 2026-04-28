@@ -25,12 +25,54 @@ type Worktree struct {
 // branches), and the directory we're creating sits outside the repo's
 // SAFE_AI_UTIL_REPO_ROOT, so safe-ai-util would reject the operation
 // anyway.
-func AddWorktree(ctx context.Context, repoPath, branch, path string) (*Worktree, error) {
+//
+// If `excludePaths` is non-empty, the worktree is materialized with
+// non-cone sparse-checkout that includes everything except those
+// directories. This keeps disk usage down on runners with limited scratch
+// space when the repo has heavy fixtures (e.g. checked-in audio testdata)
+// the burndown bot doesn't need. Each entry is interpreted as a directory
+// prefix relative to repo root; leading/trailing "/" are normalized.
+func AddWorktree(ctx context.Context, repoPath, branch, path string, excludePaths ...string) (*Worktree, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "add", "-b", branch, path)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("git worktree add: %w (output: %s)", err, strings.TrimSpace(string(out)))
 	}
+	if len(excludePaths) > 0 {
+		if err := applySparseExclude(ctx, path, excludePaths); err != nil {
+			// Best-effort cleanup so a half-configured worktree doesn't
+			// linger and confuse the next run.
+			_ = RemoveWorktree(ctx, repoPath, path)
+			_ = DeleteBranch(ctx, repoPath, branch)
+			return nil, fmt.Errorf("apply sparse-checkout exclude: %w", err)
+		}
+	}
 	return &Worktree{Path: path, Branch: branch}, nil
+}
+
+// applySparseExclude switches the worktree at `path` to non-cone
+// sparse-checkout that includes everything except `excludes`. Tree objects
+// remain in .git, so a later `sparse-checkout disable` restores the full
+// working copy if a downstream step needs it.
+func applySparseExclude(ctx context.Context, path string, excludes []string) error {
+	// Non-cone mode uses gitignore-style patterns. "/*" includes everything
+	// at root; each "!/<dir>/" line negates a subtree so it stays out of the
+	// working copy.
+	patterns := []string{"/*"}
+	for _, e := range excludes {
+		e = strings.Trim(e, "/")
+		if e == "" {
+			continue
+		}
+		patterns = append(patterns, "!/"+e+"/")
+	}
+	if out, err := exec.CommandContext(ctx, "git", "-C", path, "sparse-checkout", "init", "--no-cone").CombinedOutput(); err != nil {
+		return fmt.Errorf("sparse-checkout init: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	args := append([]string{"-C", path, "sparse-checkout", "set", "--no-cone"}, patterns...)
+	if out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("sparse-checkout set: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // RemoveWorktree drops a worktree previously created via AddWorktree.

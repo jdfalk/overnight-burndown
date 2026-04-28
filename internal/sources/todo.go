@@ -93,6 +93,13 @@ func (c *TODOCollector) Collect(_ context.Context, repo string, localPath string
 		line := sc.Text()
 		if isUncheckedItem(line) {
 			flush() // close any in-flight task
+			// `[hold]` anywhere in the line excludes the item entirely. Used for
+			// spec-pending or under-review tasks that need to stay unchecked but
+			// must not be auto-executed.
+			if HasHoldMarker(line) {
+				current = nil
+				continue
+			}
 			title := stripChecklistPrefix(strings.ToLower(line))
 			title = stripAutoOK(title)
 			title = strings.TrimSpace(title)

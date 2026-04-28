@@ -89,6 +89,11 @@ type Dispatcher struct {
 	// MaxParallel caps concurrent agents. Defaults to 4 if 0.
 	MaxParallel int
 
+	// WorktreeExcludePaths are passed to AddWorktree to materialize each
+	// worktree via non-cone sparse-checkout, omitting these directory
+	// prefixes. Empty = full checkout (current behavior).
+	WorktreeExcludePaths []string
+
 	// RunAgent / SpawnMCP let tests override the slow paths. Defaults
 	// are wired by NewDispatcher.
 	RunAgent RunAgentFunc
@@ -166,7 +171,7 @@ func (d *Dispatcher) runOne(ctx context.Context, item TaskWithDecision, branch s
 	wtPath := WorktreePath(d.WorktreeRoot, d.RepoName, branch)
 	out.WorktreePath = wtPath
 
-	wt, err := AddWorktree(ctx, d.RepoLocalPath, branch, wtPath)
+	wt, err := AddWorktree(ctx, d.RepoLocalPath, branch, wtPath, d.WorktreeExcludePaths...)
 	if err != nil {
 		out.Error = "create worktree: " + err.Error()
 		return out

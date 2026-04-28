@@ -288,14 +288,15 @@ func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t triag
 
 	// Dispatch.
 	d := &dispatch.Dispatcher{
-		AnthropicClient: r.Anthropic,
-		Model:           anthropic.Model(r.Config.Anthropic.ImplementerModel),
-		RepoLocalPath:   repoCfg.LocalPath,
-		RepoName:        repoCfg.Name,
-		WorktreeRoot:    r.Config.Paths.WorktreeRoot,
-		MaxParallel:     r.Config.Concurrency.MaxParallelAgents,
-		RunAgent:        r.RunAgent,
-		SpawnMCP:        r.SpawnMCP,
+		AnthropicClient:      r.Anthropic,
+		Model:                anthropic.Model(r.Config.Anthropic.ImplementerModel),
+		RepoLocalPath:        repoCfg.LocalPath,
+		RepoName:             repoCfg.Name,
+		WorktreeRoot:         r.Config.Paths.WorktreeRoot,
+		MaxParallel:          r.Config.Concurrency.MaxParallelAgents,
+		WorktreeExcludePaths: repoCfg.WorktreeExcludePaths,
+		RunAgent:             r.RunAgent,
+		SpawnMCP:             r.SpawnMCP,
 	}
 	outcomes, err := d.Dispatch(ctx, items)
 	if err != nil {

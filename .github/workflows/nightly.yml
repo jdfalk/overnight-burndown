@@ -1,5 +1,15 @@
 # file: .github/workflows/nightly.yml
-# version: 1.0.4
+# version: 1.1.0
+#
+# Single-runner nightly burndown. The matrix-per-task split is tracked in
+# docs/MATRIX-SPLIT-PLAN.md and lands in a follow-up PR — it requires new
+# `triage` / `dispatch-one` / `aggregate` subcommands on the burndown binary.
+#
+# Until then, this workflow installs the runtime tools the dispatcher needs
+# (safe-ai-util-mcp + safe-ai-util binary), manages its own Go module cache
+# via gh artifacts (actions/cache has been flaky), and excludes heavy
+# fixtures from the target repo checkout to keep the runner from ENOSPC-ing
+# while creating 15 worktrees.
 
 name: Nightly burndown
 
@@ -20,6 +30,12 @@ on:
 
 permissions:
   contents: read
+  actions: write   # download/upload our manual Go-module-cache artifact
+
+env:
+  SAFE_AI_UTIL_VERSION: '0.4.0'      # GitHub Release tag on jdfalk/safe-ai-util
+  SAFE_AI_UTIL_MCP_REF: 'main'       # git ref of jdfalk/safe-ai-util-mcp to pip install
+  GO_VERSION: '1.25'
 
 jobs:
   run:
@@ -32,12 +48,16 @@ jobs:
         with:
           path: burndown
 
-      - name: Checkout audiobook-organizer (target repo)
+      - name: Checkout audiobook-organizer (target repo, sparse — excludes testdata/audio)
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
           repository: jdfalk/audiobook-organizer
           path: targets/audiobook-organizer
           fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/testdata/audio/
+          sparse-checkout-cone-mode: false
 
       - name: Validate secrets
         env:
@@ -59,14 +79,109 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
         with:
-          go-version: '1.25'
+          go-version: ${{ env.GO_VERSION }}
           check-latest: true
-          cache: true
-          cache-dependency-path: burndown/go.sum
+          cache: false   # actions/cache integration is flaky here; we manage GOMODCACHE manually below
+
+      - name: Compute Go module cache key
+        id: gocache
+        run: |
+          set -euo pipefail
+          # GOMODCACHE is pinned so restore + Go agree on layout. The cache
+          # key is purely a function of go.sum so a sum change is a fresh key.
+          echo "GOMODCACHE=$RUNNER_TEMP/gomodcache" >> "$GITHUB_ENV"
+          echo "GOCACHE=$RUNNER_TEMP/gobuild"      >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/gomodcache" "$RUNNER_TEMP/gobuild"
+          sum=$(sha256sum burndown/go.sum | cut -c1-16)
+          echo "key=gomodcache-${RUNNER_OS}-go${GO_VERSION}-${sum}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Go module cache (manual via gh artifacts)
+        id: restore-gocache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY: ${{ steps.gocache.outputs.key }}
+        run: |
+          set -euo pipefail
+          # Find the most recent successful run of THIS workflow that uploaded
+          # an artifact named $KEY. If none exists, this is a cache miss and
+          # we skip the download — Go will populate the empty dir on first build.
+          run_id=$(gh api -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${KEY}&per_page=1" \
+            --jq '.artifacts[0].workflow_run.id // empty')
+          if [ -z "$run_id" ]; then
+            echo "cache miss for $KEY — first build will populate"
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh run download "$run_id" --name "$KEY" --dir "$RUNNER_TEMP/gocache-restore"
+          # Tar layout: gomodcache/ and gobuild/ at the root.
+          if [ -d "$RUNNER_TEMP/gocache-restore/gomodcache" ]; then
+            cp -a "$RUNNER_TEMP/gocache-restore/gomodcache/." "$GOMODCACHE/"
+          fi
+          if [ -d "$RUNNER_TEMP/gocache-restore/gobuild" ]; then
+            cp -a "$RUNNER_TEMP/gocache-restore/gobuild/." "$GOCACHE/"
+          fi
+          rm -rf "$RUNNER_TEMP/gocache-restore"
+          echo "hit=true" >> "$GITHUB_OUTPUT"
 
       - name: Build burndown
         working-directory: burndown
         run: go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown
+
+      - name: Save Go module cache (manual via artifact upload)
+        # Skip on a hit — re-uploading the same content just consumes storage.
+        if: steps.restore-gocache.outputs.hit != 'true'
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: ${{ steps.gocache.outputs.key }}
+          path: |
+            ${{ env.GOMODCACHE }}
+            ${{ env.GOCACHE }}
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Install Python (for safe-ai-util-mcp)
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Install safe-ai-util binary (Rust release artifact)
+        env:
+          VERSION: ${{ env.SAFE_AI_UTIL_VERSION }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dest="$HOME/.local/bin"
+          mkdir -p "$dest"
+          # Download the linux-x86_64 release tarball and extract just the binary.
+          # The release asset naming follows the cargo-dist convention used by
+          # jdfalk/safe-ai-util — adjust if the upstream renames its artifacts.
+          asset="safe-ai-util-x86_64-unknown-linux-gnu.tar.gz"
+          tmp="$(mktemp -d)"
+          gh release download "v${VERSION}" \
+            --repo jdfalk/safe-ai-util \
+            --pattern "$asset" \
+            --dir "$tmp"
+          tar -xzf "$tmp/$asset" -C "$tmp"
+          mv "$tmp"/*/safe-ai-util "$dest/safe-ai-util"
+          chmod +x "$dest/safe-ai-util"
+          rm -rf "$tmp"
+          echo "$dest" >> "$GITHUB_PATH"
+          # Sanity check — fail fast if PATH wiring is wrong.
+          PATH="$dest:$PATH" safe-ai-util --version
+
+      - name: Install safe-ai-util-mcp (Python package, pinned ref)
+        env:
+          REF: ${{ env.SAFE_AI_UTIL_MCP_REF }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # Install from a pinned git ref so a stray push to main can't change
+          # the runner's behavior mid-night. Bump SAFE_AI_UTIL_MCP_REF to roll.
+          pip install "git+https://github.com/jdfalk/safe-ai-util-mcp@${REF}"
+          # Sanity check — confirm the entry point is on PATH for the dispatcher.
+          which safe-ai-util-mcp
+          safe-ai-util-mcp --help >/dev/null 2>&1 || true
 
       - name: Materialize GitHub App private key
         env:
