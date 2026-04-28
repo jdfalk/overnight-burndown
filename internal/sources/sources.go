@@ -132,6 +132,7 @@ func stripAutoOK(s string) string {
 var (
 	checklistPrefix = regexp.MustCompile(`(?i)^\s*(?:[-*+]|\d+\.)\s*\[\s*[xX ]?\s*\]\s*`)
 	autoOKMarker    = regexp.MustCompile(`(?i)^\s*\[\s*auto-ok\s*\]\s*`)
+	holdMarker      = regexp.MustCompile(`(?i)\[\s*hold\s*\]`)
 	punct           = regexp.MustCompile(`[^\w\s]+`)
 	ws              = regexp.MustCompile(`\s+`)
 )
@@ -140,4 +141,12 @@ var (
 // the line. Used by the TODO and plan collectors to populate Task.HasAutoOK.
 func HasAutoOKMarker(line string) bool {
 	return autoOKMarker.MatchString(strings.TrimSpace(line))
+}
+
+// HasHoldMarker reports whether `[hold]` appears anywhere in the line. Items
+// tagged this way are excluded from collection so the burndown bot won't pick
+// them up. Use it for spec-pending or under-review items where an unchecked
+// `[ ]` is appropriate but auto-execution is not.
+func HasHoldMarker(line string) bool {
+	return holdMarker.MatchString(line)
 }

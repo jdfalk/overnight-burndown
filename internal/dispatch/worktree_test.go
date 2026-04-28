@@ -63,6 +63,41 @@ func TestAddWorktree_CreatesBranchAndDir(t *testing.T) {
 	}
 }
 
+func TestAddWorktree_SparseExcludeOmitsHeavyDirs(t *testing.T) {
+	repo := makeRepo(t)
+	// Add some "heavy fixtures" we want to exclude, plus a "light" file we want.
+	run := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "testdata", "audio"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "testdata", "audio", "big.mp3"), []byte("AUDIO"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "src.go"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "testdata", "src.go")
+	run("commit", "-q", "-m", "add fixtures")
+
+	wtPath := filepath.Join(t.TempDir(), "wt")
+	if _, err := AddWorktree(context.Background(), repo, "auto/sparse", wtPath, "testdata/audio"); err != nil {
+		t.Fatalf("AddWorktree: %v", err)
+	}
+	// src.go must materialize.
+	if _, err := os.Stat(filepath.Join(wtPath, "src.go")); err != nil {
+		t.Errorf("src.go should be present: %v", err)
+	}
+	// Excluded path must NOT materialize.
+	if _, err := os.Stat(filepath.Join(wtPath, "testdata", "audio", "big.mp3")); !os.IsNotExist(err) {
+		t.Errorf("testdata/audio should be excluded by sparse-checkout, err=%v", err)
+	}
+}
+
 func TestRemoveWorktree_CleansUp(t *testing.T) {
 	repo := makeRepo(t)
 	wtPath := filepath.Join(t.TempDir(), "wt")

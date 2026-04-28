@@ -90,6 +90,11 @@ repos:
     owner: jdfalk
     local_path: {workspace}/targets/audiobook-organizer
     mode: {mode}
+    # Exclude heavy fixtures from per-task worktrees so 15 parallel worktrees
+    # fit on a stock GitHub Actions runner (14 GB ephemeral disk). Without
+    # this, ~1.4 GB of LibriVox audio per worktree ENOSPCs around task 5.
+    worktree_exclude_paths:
+      - testdata/audio
 """
     )
 

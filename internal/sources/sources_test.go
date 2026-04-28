@@ -155,6 +155,59 @@ func TestTODOCollector_ParsesUncheckedItems(t *testing.T) {
 	}
 }
 
+func TestTODOCollector_HoldMarkerExcludesItem(t *testing.T) {
+	td := t.TempDir()
+	body := strings.Join([]string{
+		"# TODO",
+		"",
+		"- [ ] regular task",
+		"- [ ] **ASYNC-CORE-1** something [hold] — spec under review",
+		"  continuation that should also be skipped",
+		"- [ ] [HOLD] case-insensitive marker",
+		"- [ ] another regular task",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(td, "TODO.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := NewTODOCollector().Collect(context.Background(), "x/y", td)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 tasks (held items skipped), got %d: %+v", len(got), got)
+	}
+	for _, task := range got {
+		if strings.Contains(strings.ToLower(task.Body), "hold") {
+			t.Errorf("held item leaked through: %q", task.Body)
+		}
+	}
+}
+
+func TestHasHoldMarker(t *testing.T) {
+	yes := []string{
+		"foo [hold] bar",
+		"FOO [HOLD] BAR",
+		"foo [ hold ] bar",
+		"- [ ] **TASK** thing [hold] — note",
+	}
+	for _, s := range yes {
+		if !HasHoldMarker(s) {
+			t.Errorf("HasHoldMarker(%q) = false, want true", s)
+		}
+	}
+	no := []string{
+		"foo bar",
+		"household items",   // substring without brackets — fine
+		"hold the door",
+	}
+	for _, s := range no {
+		if HasHoldMarker(s) {
+			t.Errorf("HasHoldMarker(%q) = true, want false", s)
+		}
+	}
+}
+
 func TestTODOCollector_MissingFileIsNotAnError(t *testing.T) {
 	td := t.TempDir() // no TODO.md created
 	c := NewTODOCollector()

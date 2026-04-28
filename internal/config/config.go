@@ -200,6 +200,13 @@ type RepoConfig struct {
 	CIWatchTimeoutSeconds int      `yaml:"ci_watch_timeout_seconds,omitempty"`
 	AutoMergePaths        []string `yaml:"auto_merge_paths,omitempty"`
 	PolicyOverlayPath     string   `yaml:"policy_overlay_path,omitempty"`
+
+	// WorktreeExcludePaths are directory prefixes (relative to repo root) to
+	// omit from worktree checkouts via non-cone sparse-checkout. Use this for
+	// large fixtures (checked-in audio testdata, compiled artifacts) the
+	// burndown bot doesn't need — it's the difference between a runner that
+	// fits 15 worktrees in scratch and one that ENOSPCs at task 5.
+	WorktreeExcludePaths []string `yaml:"worktree_exclude_paths,omitempty"`
 }
 
 // Load reads, parses, expands ~ in paths, applies defaults, and validates.
