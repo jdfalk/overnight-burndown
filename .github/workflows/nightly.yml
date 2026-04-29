@@ -34,6 +34,17 @@ on:
           - draft-only
           - review
           - full
+      implementer_provider:
+        description: >
+          Implementer LLM backend. openai = Responses API with codex-mini/gpt-5 tiers + fallback chain.
+          anthropic = Claude haiku/sonnet/opus tiers (requires BURNDOWN_BOT_ANTHROPIC_API_KEY secret).
+          Scheduled nightlies always use openai.
+        required: false
+        default: 'openai'
+        type: choice
+        options:
+          - openai
+          - anthropic
 
 permissions:
   contents: read
@@ -90,12 +101,15 @@ jobs:
       - name: Validate runtime credentials
         env:
           OPENAI_API_KEY: ${{ secrets.BURNDOWN_BOT_OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.BURNDOWN_BOT_ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ github.token }}
+          IMPLEMENTER_PROVIDER: ${{ inputs.implementer_provider || 'openai' }}
         run: |
           set -euo pipefail
-          # OpenAI key
+          # Validate the key for whichever provider this run will use.
+          # Triage always uses OpenAI, so we check that key unconditionally.
           if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "::error::BURNDOWN_BOT_OPENAI_API_KEY secret is not set"
+            echo "::error::BURNDOWN_BOT_OPENAI_API_KEY secret is not set (required for triage)"
             exit 1
           fi
           openai_code=$(curl -sf -o /dev/null -w "%{http_code}" \
@@ -105,6 +119,22 @@ jobs:
             exit 1
           fi
           echo "OpenAI key OK ($openai_code)"
+          # Anthropic key — required only when implementer_provider=anthropic.
+          if [ "$IMPLEMENTER_PROVIDER" = "anthropic" ]; then
+            if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+              echo "::error::BURNDOWN_BOT_ANTHROPIC_API_KEY secret is not set (required for anthropic provider)"
+              exit 1
+            fi
+            anthropic_code=$(curl -sf -o /dev/null -w "%{http_code}" \
+              -H "x-api-key: $ANTHROPIC_API_KEY" \
+              -H "anthropic-version: 2023-06-01" \
+              https://api.anthropic.com/v1/models || true)
+            if [ "$anthropic_code" != "200" ]; then
+              echo "::error::Anthropic key rejected (HTTP $anthropic_code) — validate at console.anthropic.com"
+              exit 1
+            fi
+            echo "Anthropic key OK ($anthropic_code)"
+          fi
           # GitHub token
           gh_code=$(curl -sf -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $GH_TOKEN" \
@@ -143,6 +173,7 @@ jobs:
       - name: Render config
         env:
           MODE: ${{ inputs.mode || 'dry-run' }}
+          IMPLEMENTER_PROVIDER: ${{ inputs.implementer_provider || 'openai' }}
           WORKSPACE: ${{ github.workspace }}
           GH_APP_ID: ${{ secrets.BURNDOWN_BOT_APP_ID }}
           GH_APP_INSTALLATION_ID: ${{ secrets.BURNDOWN_BOT_INSTALLATION_ID }}
@@ -255,7 +286,9 @@ jobs:
       - name: Validate runtime credentials
         env:
           OPENAI_API_KEY: ${{ secrets.BURNDOWN_BOT_OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.BURNDOWN_BOT_ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ github.token }}
+          IMPLEMENTER_PROVIDER: ${{ inputs.implementer_provider || 'openai' }}
         run: |
           set -euo pipefail
           if [ -z "${OPENAI_API_KEY:-}" ]; then
@@ -269,6 +302,21 @@ jobs:
             exit 1
           fi
           echo "OpenAI key OK ($openai_code)"
+          if [ "$IMPLEMENTER_PROVIDER" = "anthropic" ]; then
+            if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+              echo "::error::BURNDOWN_BOT_ANTHROPIC_API_KEY secret is not set"
+              exit 1
+            fi
+            anthropic_code=$(curl -sf -o /dev/null -w "%{http_code}" \
+              -H "x-api-key: $ANTHROPIC_API_KEY" \
+              -H "anthropic-version: 2023-06-01" \
+              https://api.anthropic.com/v1/models || true)
+            if [ "$anthropic_code" != "200" ]; then
+              echo "::error::Anthropic key rejected (HTTP $anthropic_code)"
+              exit 1
+            fi
+            echo "Anthropic key OK ($anthropic_code)"
+          fi
           gh_code=$(curl -sf -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -366,7 +414,9 @@ jobs:
       - name: Validate runtime credentials
         env:
           OPENAI_API_KEY: ${{ secrets.BURNDOWN_BOT_OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.BURNDOWN_BOT_ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ github.token }}
+          IMPLEMENTER_PROVIDER: ${{ inputs.implementer_provider || 'openai' }}
         run: |
           set -euo pipefail
           if [ -z "${OPENAI_API_KEY:-}" ]; then
@@ -380,6 +430,21 @@ jobs:
             exit 1
           fi
           echo "OpenAI key OK ($openai_code)"
+          if [ "$IMPLEMENTER_PROVIDER" = "anthropic" ]; then
+            if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+              echo "::error::BURNDOWN_BOT_ANTHROPIC_API_KEY secret is not set"
+              exit 1
+            fi
+            anthropic_code=$(curl -sf -o /dev/null -w "%{http_code}" \
+              -H "x-api-key: $ANTHROPIC_API_KEY" \
+              -H "anthropic-version: 2023-06-01" \
+              https://api.anthropic.com/v1/models || true)
+            if [ "$anthropic_code" != "200" ]; then
+              echo "::error::Anthropic key rejected (HTTP $anthropic_code)"
+              exit 1
+            fi
+            echo "Anthropic key OK ($anthropic_code)"
+          fi
           gh_code=$(curl -sf -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
