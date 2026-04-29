@@ -31,9 +31,40 @@ triage:
   provider: anthropic                  # anthropic | openai
   model: claude-opus-4-7               # exact model id for the chosen provider
 
+# ---------------------------------------------------------------------------
+# Implementer — pick ONE block below; comment out the other.
+# ---------------------------------------------------------------------------
+
+# Option A (default): OpenAI Responses API with tier selection + fallback chain.
+# Tier selection picks the cheapest model for the task's complexity (1–5);
+# fallback chain escalates to the next tier when the primary hits 429 limits.
+# PreviousResponseID carries the conversation server-side across the swap.
 implementer:
-  provider: openai                     # different provider from triage is fine
-  model: gpt-5                         # used for each per-task agent loop (parallel)
+  provider: openai
+  model: gpt-5.1-codex-mini            # catch-all when no tier matches
+  model_tiers:
+    - model: gpt-5.1-codex-mini        # simple tasks — complexity 1–2
+      max_complexity: 2
+    - model: gpt-5.3-codex             # moderate — complexity 3–4
+      max_complexity: 4
+    - model: gpt-5                     # hardest — complexity 5 (no max = catch-all)
+  # api: responses                     # default; set to chat-completions to revert
+
+# Option B: Anthropic Claude tiers (uncomment and comment out Option A above).
+# Requires ANTHROPIC_API_KEY. No runtime fallback chain — Anthropic has no
+# PreviousResponseID equivalent; tier selection (pick-once-before-loop) is used.
+# Use the workflow_dispatch 'implementer_provider' input to activate in CI:
+#   implementer_provider: anthropic
+#
+# implementer:
+#   provider: anthropic
+#   model: claude-haiku-4-5-20251001   # catch-all when no tier matches
+#   model_tiers:
+#     - model: claude-haiku-4-5-20251001   # simplest tasks — complexity 1–2
+#       max_complexity: 2
+#     - model: claude-sonnet-4-6           # medium — complexity 3–4
+#       max_complexity: 4
+#     - model: claude-opus-4-7             # hardest — complexity 5 (no max = catch-all)
 
 # ---------------------------------------------------------------------------
 # GitHub App auth
