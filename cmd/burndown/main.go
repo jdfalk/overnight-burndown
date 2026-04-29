@@ -224,11 +224,14 @@ func pickRunAgent(cfg *config.Config, providers *providerClients) (dispatch.RunA
 			}, nil
 		}
 		return func(ctx context.Context, opts agent.Options) (*agent.Result, error) {
-			// Select the model tier that matches this task's complexity score
-			// (1–5 from triage). Falls back to implementer.model when no
-			// model_tiers are configured.
+			// Tier selection: cheapest model expected to handle this complexity.
+			// Fallback chain: if that model exhausts 429 retries, escalate to
+			// the next tier in order. PreviousResponseID carries the conversation
+			// across the swap so the new model picks up exactly where the primary
+			// left off with no token re-upload.
 			selected := cfg.Implementer.SelectModel(opts.Decision.EstComplexity)
-			return agent.RunOpenAIResponses(ctx, client, selected, opts)
+			chain := append([]string{selected}, cfg.Implementer.FallbacksFrom(opts.Decision.EstComplexity)...)
+			return agent.RunOpenAIResponses(ctx, client, chain, opts)
 		}, nil
 	case config.ProviderAnthropic:
 		// agent.Run reads opts.Client and opts.Model that the dispatcher

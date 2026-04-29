@@ -1,5 +1,5 @@
 // file: internal/agent/openai_responses.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
 //
 // OpenAI Responses API implementer agent. Counterpart to RunOpenAI in
@@ -16,12 +16,17 @@
 //   * Several recent models (gpt-5.1-codex-mini, gpt-5.4 reasoning) ship
 //     on /v1/responses only.
 //
-// Model selection is done before the call via config.LLMFeatureConfig.SelectModel,
-// which maps triage complexity (1–5) to a model tier. The caller passes a
-// single pre-selected model string; there is no runtime fallback chain.
-// If that model returns persistent 429s, callResponsesWithRetry backs off
-// and eventually returns an error — the caller decides whether to skip or
-// requeue the task.
+// Model selection uses two complementary mechanisms:
+//   1. Tier selection (config.LLMFeatureConfig.SelectModel): picks the
+//      cheapest model expected to handle the task's complexity (1–5) before
+//      the loop starts.
+//   2. Runtime fallback (this file): if the selected model exhausts its
+//      429-retry budget, the next model in the chain (from
+//      config.LLMFeatureConfig.FallbacksFrom) is swapped in.
+//
+// PreviousResponseID carries the conversation thread across a model swap —
+// OpenAI allows mid-thread model changes — so the new model picks up
+// exactly where the primary left off without re-uploading history.
 
 package agent
 
@@ -30,6 +35,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/openai/openai-go"
@@ -40,22 +46,23 @@ import (
 	"github.com/jdfalk/overnight-burndown/internal/mcp"
 )
 
-// RunOpenAIResponses is the Responses-API sibling of RunOpenAI. Same
-// signature, same semantics: loop until the model returns no more
-// function_call output items or MaxIterations is hit.
+// stderr is overridable in tests; production points at os.Stderr.
+var stderr = os.Stderr
+
+// RunOpenAIResponses is the Responses-API sibling of RunOpenAI.
 //
-// `model` is a single pre-selected model string. Callers choose the model
-// before the call via config.LLMFeatureConfig.SelectModel, which maps the
-// task's triage complexity score (1–5) to a tier. This avoids re-sending
-// the full conversation history across a model swap mid-loop.
+// `models` is an ordered chain: index 0 is the primary model (selected by
+// tier); subsequent entries are fallbacks tried only when the previous model
+// exhausts its 429-retry budget. The conversation thread carries across a
+// swap via PreviousResponseID. We "stick" once we fall back — flapping back
+// to the primary would re-trigger the same TPM bucket.
 //
-// Each iteration after the first uses PreviousResponseID to thread the
-// conversation server-side; we never re-upload prior input + tool outputs.
-// Token usage is accumulated per call into res.Usage so the digest can show
-// the savings vs Chat Completions.
-func RunOpenAIResponses(ctx context.Context, client openai.Client, model string, opts Options) (*Result, error) {
-	if model == "" {
-		return nil, errors.New("agent: RunOpenAIResponses requires a non-empty model")
+// Each attempted model is recorded in res.AttemptedModels so the harness
+// can apply a model:<slug> label for each, enabling training-signal queries
+// like "which tasks needed escalation to gpt-5?".
+func RunOpenAIResponses(ctx context.Context, client openai.Client, models []string, opts Options) (*Result, error) {
+	if len(models) == 0 {
+		return nil, errors.New("agent: RunOpenAIResponses requires at least one model")
 	}
 	if opts.MaxIterations <= 0 {
 		opts.MaxIterations = 30
@@ -72,19 +79,23 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, model string,
 		return nil, errors.New("agent: no MCP tools matched the allowlist")
 	}
 
-	res := &Result{Model: model}
+	res := &Result{
+		Model:           models[0],
+		AttemptedModels: []string{models[0]},
+	}
 	// First iteration: fresh conversation seeded with the user task; later
 	// iterations send only the resolved tool outputs and PreviousResponseID.
 	input := responses.ResponseNewParamsInputUnion{
 		OfString: openai.String(buildUserMessage(opts)),
 	}
 	var prevID string
+	modelIdx := 0 // points into models; advances on retry-budget exhaustion
 
 	for i := 0; i < opts.MaxIterations; i++ {
 		res.Iterations = i + 1
 
 		params := responses.ResponseNewParams{
-			Model:        shared.ResponsesModel(model),
+			Model:        shared.ResponsesModel(models[modelIdx]),
 			Input:        input,
 			Instructions: openai.String(implementerSystemPrompt),
 			Tools:        tools,
@@ -98,12 +109,14 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, model string,
 			params.PreviousResponseID = openai.String(prevID)
 		}
 
-		resp, err := callResponsesWithRetry(ctx, client, params)
+		resp, err := callResponsesWithModelFallback(ctx, client, params, models, &modelIdx, res)
 		if err != nil {
-			return nil, fmt.Errorf("agent: openai responses call (iter %d): %w",
-				res.Iterations, err)
+			return nil, fmt.Errorf("agent: openai responses call (iter %d, models tried=%d): %w",
+				res.Iterations, modelIdx+1, err)
 		}
 		prevID = resp.ID
+		// Keep Model in sync with whatever model is currently active.
+		res.Model = models[modelIdx]
 
 		// Token-usage accounting per call. Responses uses InputTokens /
 		// OutputTokens (vs PromptTokens / CompletionTokens on Chat
@@ -178,6 +191,36 @@ type responsesToolCall struct {
 	Arguments string
 }
 
+// errRetriesExhausted is returned by callResponsesWithRetry when its retry
+// budget is consumed. The model-fallback wrapper looks for it via errors.Is.
+var errRetriesExhausted = errors.New("rate-limit retries exhausted")
+
+// callResponsesWithModelFallback wraps callResponsesWithRetry with a model
+// fallback chain. On retry-budget exhaustion we advance *modelIdx and retry
+// against the next model. We record the new model in res.AttemptedModels.
+// Non-retry errors (auth, 4xx body) propagate immediately — switching models
+// won't fix them.
+func callResponsesWithModelFallback(ctx context.Context, client openai.Client, params responses.ResponseNewParams, models []string, modelIdx *int, res *Result) (*responses.Response, error) {
+	for {
+		resp, err := callResponsesWithRetry(ctx, client, params)
+		if err == nil {
+			return resp, nil
+		}
+		if !errors.Is(err, errRetriesExhausted) {
+			return nil, err
+		}
+		if *modelIdx+1 >= len(models) {
+			return nil, fmt.Errorf("all %d model(s) exhausted retries: %w", len(models), err)
+		}
+		old := models[*modelIdx]
+		*modelIdx++
+		next := models[*modelIdx]
+		res.AttemptedModels = append(res.AttemptedModels, next)
+		fmt.Fprintf(stderr, "::warning::agent: model %s exhausted retries, falling back to %s\n", old, next)
+		params.Model = shared.ResponsesModel(next)
+	}
+}
+
 // callResponsesWithRetry mirrors callOpenAIWithRetry from openai.go, but
 // against the Responses endpoint. Same retry budget and backoff curve;
 // duplicated rather than abstracted because the SDK param + return types
@@ -196,7 +239,7 @@ func callResponsesWithRetry(ctx context.Context, client openai.Client, params re
 			return nil, err
 		}
 		if timeNow().After(deadline) {
-			return nil, fmt.Errorf("rate-limit retries exhausted (last err: %w)", err)
+			return nil, fmt.Errorf("%w (last err: %v)", errRetriesExhausted, err)
 		}
 		wait := backoffFor(attempt, baseBackoff, maxBackoff)
 		if hinted := parseRetryAfter(msg); hinted > 0 && hinted <= maxBackoff {

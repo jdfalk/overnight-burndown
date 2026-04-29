@@ -130,7 +130,7 @@ func RunOpenAI(ctx context.Context, client openai.Client, model string, opts Opt
 		openai.UserMessage(buildUserMessage(opts)),
 	}
 
-	res := &Result{Model: model}
+	res := &Result{Model: model, AttemptedModels: []string{model}}
 	for i := 0; i < opts.MaxIterations; i++ {
 		res.Iterations = i + 1
 

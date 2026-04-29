@@ -559,12 +559,19 @@ func (r *Runner) applyBurndownLabels(ctx context.Context, pub RepoPublisher, prN
 		labels = append(labels, "status:needs-review")
 	}
 
-	// model:<slug> records which model handled this task. Used as a training
-	// signal to tune the complexity→model-tier mapping: if codex-mini PRs
-	// consistently need human fixup while gpt-5 PRs merge cleanly, the tier
-	// thresholds need adjusting.
-	if oc.Model != "" {
-		labels = append(labels, "model:"+modelSlug(oc.Model))
+	// model:<slug> records every model that ran for this task — one label per
+	// attempt. Most tasks have one. When escalation occurred (primary model
+	// hit 429 limit), multiple labels appear (e.g. model:codex-mini +
+	// model:gpt-5-3-codex). Combined with the outcome label this becomes the
+	// training signal for tuning complexity→model-tier thresholds.
+	attempted := oc.AttemptedModels
+	if len(attempted) == 0 && oc.Model != "" {
+		attempted = []string{oc.Model} // fallback for non-Responses paths
+	}
+	for _, m := range attempted {
+		if m != "" {
+			labels = append(labels, "model:"+modelSlug(m))
+		}
 	}
 
 	// Size bucket from changed-line count. ListChangedFiles also serves

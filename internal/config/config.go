@@ -201,6 +201,36 @@ func (f LLMFeatureConfig) SelectModel(complexity int) string {
 	return f.Model
 }
 
+// FallbacksFrom returns the models from tiers above the one selected for
+// complexity, in ascending order. These are passed to RunOpenAIResponses as
+// the runtime escalation chain — if the primary model exhausts its 429-retry
+// budget, the next entry is tried while the conversation thread is preserved
+// via PreviousResponseID.
+//
+// Returns nil when ModelTiers is empty, no tier matched, or the selected tier
+// is already the highest (no tiers above it). In all those cases the caller
+// runs with just the primary model and fails hard on retry exhaustion.
+func (f LLMFeatureConfig) FallbacksFrom(complexity int) []string {
+	if len(f.ModelTiers) == 0 {
+		return nil
+	}
+	selectedIdx := -1
+	for i, t := range f.ModelTiers {
+		if t.MaxComplexity == 0 || complexity <= t.MaxComplexity {
+			selectedIdx = i
+			break
+		}
+	}
+	if selectedIdx < 0 || selectedIdx >= len(f.ModelTiers)-1 {
+		return nil
+	}
+	fallbacks := make([]string, 0, len(f.ModelTiers)-selectedIdx-1)
+	for _, t := range f.ModelTiers[selectedIdx+1:] {
+		fallbacks = append(fallbacks, t.Model)
+	}
+	return fallbacks
+}
+
 // OpenAIAPIName chooses which OpenAI endpoint we hit for a feature.
 type OpenAIAPIName string
 
