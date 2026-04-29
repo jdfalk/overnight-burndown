@@ -49,14 +49,17 @@ def render() -> str:
     sections: list[str] = []
 
     # ------------------------------------------------------------------
-    # Provider credentials — only emit the block(s) needed by the run.
+    # Provider credentials — triage always uses OpenAI, so the openai
+    # section is always required. Anthropic section is added when the
+    # implementer is anthropic. config.Validate checks that api_key_env
+    # is non-empty (config structure only); the env vars themselves are
+    # only read at runtime by the provider that is actually called.
     # ------------------------------------------------------------------
-    if provider == "openai":
-        sections.append("""\
+    sections.append("""\
 openai:
   api_key_env: OPENAI_API_KEY
 """)
-    elif provider == "anthropic":
+    if provider == "anthropic":
         sections.append("""\
 anthropic:
   api_key_env: ANTHROPIC_API_KEY
