@@ -177,6 +177,9 @@ func RunOpenAI(ctx context.Context, client openai.Client, model string, opts Opt
 		for _, tc := range msg.ToolCalls {
 			res.ToolCallCount++
 			content := executeOpenAIToolCall(ctx, opts.MCP, tc)
+			if tc.Function.Name == "report_status" {
+				captureReportStatus(res, tc.Function.Arguments)
+			}
 			messages = append(messages, openai.ToolMessage(content, tc.ID))
 		}
 	}

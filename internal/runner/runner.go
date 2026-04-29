@@ -353,24 +353,37 @@ func (r *Runner) publishOutcome(
 		return fmt.Errorf("commit/push: %w", err)
 	}
 
-	// Open PR. Draft state depends on mode + triage classification:
-	//   draft-only       → always draft.
-	//   review           → always ready-for-review (the whole point —
-	//                      human sees it in the normal review queue).
-	//   full + SAFE      → ready-for-review (it'll auto-merge if CI green).
-	//   full + non-SAFE  → draft (unsafe; human review required).
+	// Agent's self-reported task status (via report_status MCP tool) is
+	// the strongest signal we have for whether the work is actually done.
+	// "blocked" or "partial" force draft regardless of mode; "complete"
+	// honors mode. Empty means the agent didn't call report_status (older
+	// MCP, or the model ignored the directive) — fall through to mode-based
+	// defaults.
+	reported := ""
+	if oc.AgentResult != nil {
+		reported = strings.ToLower(strings.TrimSpace(oc.AgentResult.ReportedStatus))
+	}
+
+	// Open PR. Draft state:
+	//   reported=blocked|partial → draft (regardless of mode)
+	//   draft-only mode          → draft
+	//   review mode              → ready-for-review
+	//   full + SAFE + complete   → ready-for-review (will auto-merge if CI green)
+	//   full + non-SAFE          → draft
 	var isDraft bool
-	switch repoCfg.Mode {
-	case config.ModeDraftOnly:
+	switch {
+	case reported == "blocked" || reported == "partial":
 		isDraft = true
-	case config.ModeReview:
+	case repoCfg.Mode == config.ModeDraftOnly:
+		isDraft = true
+	case repoCfg.Mode == config.ModeReview:
 		isDraft = false
 	default: // full
 		isDraft = oc.Decision.Classification != triage.ClassAutoMergeSafe
 	}
 	pr, err := pub.OpenPR(ctx, ghops.PROptions{
 		Branch:     oc.Branch,
-		Title:      buildPRTitle(oc),
+		Title:      buildPRTitle(oc, reported),
 		Body:       buildPRBody(oc),
 		BaseBranch: "main",
 		Draft:      isDraft,
@@ -382,6 +395,12 @@ func (r *Runner) publishOutcome(
 	prURL := pr.GetHTMLURL()
 	prs[oc.Branch] = digest.PRInfo{Number: prNum, URL: prURL}
 
+	// Apply labels: 'automation' tags every burndown PR; status:* reflects
+	// the agent's self-report (or "needs-review" when missing); size/* is
+	// derived from the diff size; we'll fetch that via ListChangedFiles
+	// for accuracy. Best-effort — label failures don't fail the cell.
+	r.applyBurndownLabels(ctx, pub, prNum, oc, reported)
+
 	// draft-only mode stops at PR creation.
 	if repoCfg.Mode == config.ModeDraftOnly {
 		oc.Status = state.StatusDraft
@@ -392,6 +411,12 @@ func (r *Runner) publishOutcome(
 	// even though the PR isn't literally a draft on GitHub — the digest
 	// vocabulary doesn't currently distinguish.
 	if repoCfg.Mode == config.ModeReview {
+		oc.Status = state.StatusDraft
+		return nil
+	}
+	// Agent reported blocked/partial — stop before CI watch even in full
+	// mode. The agent told us this isn't ready to merge.
+	if reported == "blocked" || reported == "partial" {
 		oc.Status = state.StatusDraft
 		return nil
 	}
@@ -457,6 +482,75 @@ func (r *Runner) publishOutcome(
 // The 7-day TTL on draft/in-flight is a safety valve: if a state row
 // gets orphaned (PR was closed manually but state never updated),
 // we retry after a week so the task isn't permanently stuck.
+// applyBurndownLabels tags a freshly-opened PR with status + size + a
+// generic "automation" marker. All best-effort — a label that doesn't
+// exist on the target repo, or a transient API hiccup, is logged and
+// ignored. Downstream automations (auto-merge bots, claude-review, etc.)
+// can filter on these labels rather than parsing PR bodies.
+//
+// Labels applied:
+//
+//   automation                 every burndown PR
+//   status:ready              report_status="complete"
+//   status:needs-review       report_status="partial" or absent
+//   status:blocked            report_status="blocked"
+//   size/{XS,S,M,L,XL}        based on changed-line count from
+//                              ListChangedFiles (XS<10, S<50, M<200,
+//                              L<1000, XL≥1000)
+//   needs-claude-review       size/L or size/XL — flag for the
+//                              human-or-bot review step
+func (r *Runner) applyBurndownLabels(ctx context.Context, pub RepoPublisher, prNum int, oc *dispatch.Outcome, reported string) {
+	labels := []string{"automation"}
+	switch reported {
+	case "blocked":
+		labels = append(labels, "status:blocked")
+	case "partial":
+		labels = append(labels, "status:needs-review")
+	case "complete":
+		labels = append(labels, "status:ready")
+	default:
+		labels = append(labels, "status:needs-review")
+	}
+
+	// Size bucket from changed-line count. ListChangedFiles also serves
+	// the gate evaluator, so we may already have it; pay the API call
+	// once here and accept the duplication for now.
+	if files, err := pub.ListChangedFiles(ctx, prNum); err == nil {
+		var total int
+		for _, f := range files {
+			total += f.Additions + f.Deletions
+		}
+		size := sizeBucket(total)
+		labels = append(labels, "size/"+size)
+		if size == "L" || size == "XL" {
+			labels = append(labels, "needs-claude-review")
+		}
+	}
+
+	for _, l := range labels {
+		if err := pub.AddLabel(ctx, prNum, l); err != nil {
+			fmt.Fprintf(os.Stderr, "burndown: AddLabel %q on PR #%d: %v\n", l, prNum, err)
+		}
+	}
+}
+
+// sizeBucket returns the size/* bucket for a given changed-line count.
+// Buckets are roughly aligned with industry conventions (gitsize, etc.).
+func sizeBucket(linesChanged int) string {
+	switch {
+	case linesChanged < 10:
+		return "XS"
+	case linesChanged < 50:
+		return "S"
+	case linesChanged < 200:
+		return "M"
+	case linesChanged < 1000:
+		return "L"
+	default:
+		return "XL"
+	}
+}
+
 func (r *Runner) filterFreshTasks(tasks []sources.Task) []sources.Task {
 	now := r.Now()
 	shippedCutoff := now.Add(-24 * time.Hour)
@@ -570,10 +664,19 @@ func buildCommitMessage(oc *dispatch.Outcome) string {
 	return fmt.Sprintf("%s: %s%s", prefix, title, body)
 }
 
-func buildPRTitle(oc *dispatch.Outcome) string {
+func buildPRTitle(oc *dispatch.Outcome, reported string) string {
 	title := strings.TrimSpace(oc.Task.Source.Title)
 	if title == "" {
 		title = "burndown task"
+	}
+	// Title prefix surfaces the agent's self-report at a glance in the PR
+	// list. Prefix order is intentional: BLOCKED dominates everything;
+	// otherwise WIP for partial / NeedsReview classification.
+	switch reported {
+	case "blocked":
+		return "BLOCKED: " + title
+	case "partial":
+		return "WIP: " + title
 	}
 	if oc.Decision.Classification == triage.ClassNeedsReview {
 		title = "WIP: " + title
@@ -583,14 +686,66 @@ func buildPRTitle(oc *dispatch.Outcome) string {
 
 func buildPRBody(oc *dispatch.Outcome) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Source\n\n%s\n\n", oc.Task.Source.URL)
+	fmt.Fprintf(&b, "## Source\n\n%s\n\n", sourceLink(oc.Task.Source))
 	fmt.Fprintf(&b, "## Triage\n\nClassification: **%s**\n\nReason: %s\n\n",
 		oc.Decision.Classification, oc.Decision.Reason)
 	if oc.AgentResult != nil && oc.AgentResult.Summary != "" {
 		fmt.Fprintf(&b, "## Agent summary\n\n%s\n\n", oc.AgentResult.Summary)
+		// Surface the structured self-report so reviewers see at a glance
+		// what the agent claimed status-wise.
+		if oc.AgentResult.ReportedStatus != "" {
+			fmt.Fprintf(&b, "**Reported status:** `%s`", oc.AgentResult.ReportedStatus)
+			if oc.AgentResult.ReportedReason != "" {
+				fmt.Fprintf(&b, " — %s", oc.AgentResult.ReportedReason)
+			}
+			b.WriteString("\n\n")
+		}
 	}
 	fmt.Fprint(&b, "---\n_Opened by overnight-burndown._\n")
 	return b.String()
+}
+
+// sourceLink turns a Source into a clickable markdown link. Falls back
+// to the raw URL when we don't have enough context to build a github.com
+// URL (e.g. local-only scans without a Repo field).
+//
+// TODO.md and plan files store paths relative to the repo root in
+// Source.URL (with #L<n> anchor); github.com/<repo>/blob/main/<rel> is
+// the canonical viewer URL.
+func sourceLink(src state.Source) string {
+	if src.Repo == "" || src.URL == "" {
+		return src.URL
+	}
+	switch src.Type {
+	case state.SourceIssue:
+		// Issue URLs from sources/issues.go are already full URLs.
+		return src.URL
+	default:
+		// TODO / plan / etc.: <rel-path>#L<n> → github blob link.
+		// Skip the conversion if URL already looks absolute (legacy
+		// state rows from before the relative-path fix).
+		if strings.HasPrefix(src.URL, "http://") || strings.HasPrefix(src.URL, "https://") {
+			return src.URL
+		}
+		// Strip any leading slash for safety; rel paths shouldn't have
+		// one but some scans may.
+		rel := strings.TrimPrefix(src.URL, "/")
+		// Detect + drop a leading absolute-path artifact (e.g.
+		// "/__w/.../audiobook-organizer/TODO.md#L212"). If the URL
+		// contains the repo's name in the path, slice from there on.
+		if i := strings.Index(rel, "/"+repoNameFromFull(src.Repo)+"/"); i >= 0 {
+			rel = rel[i+len("/"+repoNameFromFull(src.Repo)+"/"):]
+		}
+		return fmt.Sprintf("[`%s`](https://github.com/%s/blob/main/%s)",
+			rel, src.Repo, rel)
+	}
+}
+
+func repoNameFromFull(full string) string {
+	if i := strings.LastIndex(full, "/"); i >= 0 {
+		return full[i+1:]
+	}
+	return full
 }
 
 // prefixed prepends prefix to each item; tiny helper to keep

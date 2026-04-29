@@ -126,14 +126,14 @@ func TestRun_DryRun_EndToEnd(t *testing.T) {
 	// Stub Anthropic with two decisions matching the two TODO items.
 	anthropicURL, cleanupA := fakeAnthropic(t, []map[string]any{
 		{
-			"task_id":          repoPath + "/TODO.md#L3",
+			"task_id":          "TODO.md#L3",
 			"classification":   "AUTO_MERGE_SAFE",
 			"reason":           "doc-only typo",
 			"est_complexity":   1,
 			"suggested_branch": "auto/readme-typo",
 		},
 		{
-			"task_id":          repoPath + "/TODO.md#L4",
+			"task_id":          "TODO.md#L4",
 			"classification":   "NEEDS_REVIEW",
 			"reason":           "refactor — needs human review",
 			"est_complexity":   3,

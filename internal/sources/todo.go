@@ -74,7 +74,12 @@ func (c *TODOCollector) Collect(_ context.Context, repo string, localPath string
 				Source: state.Source{
 					Type:        state.SourceTODO,
 					Repo:        repo,
-					URL:         fmt.Sprintf("%s#L%d", path, currentMeta.line),
+					// URL is the path RELATIVE to repo root + a line anchor.
+				// Storing relative lets digests + PR bodies build a
+				// proper github.com link (https://github.com/<repo>/blob/main/<rel>#L<n>)
+				// instead of leaking the runner's absolute path
+				// (/__w/.../audiobook-organizer/TODO.md#L212).
+				URL:         fmt.Sprintf("%s#L%d", c.relativePath(name), currentMeta.line),
 					ContentHash: state.HashContent(body),
 					Title:       currentMeta.title,
 				},
@@ -136,6 +141,17 @@ func (c *TODOCollector) Collect(_ context.Context, repo string, localPath string
 // HasAutoOKMarker check sees just the post-checkbox text.
 func unwrapList(line string) string {
 	return checklistPrefix.ReplaceAllString(line, "")
+}
+
+// relativePath returns the configured filename. When TODOCollector is
+// scanning a different file (tests override Filename), this is just that
+// name. The TODO file always lives at the repo root, so the name itself
+// is the rel-path.
+func (c *TODOCollector) relativePath(filename string) string {
+	if c.Filename != "" {
+		return c.Filename
+	}
+	return filename
 }
 
 func isUncheckedItem(line string) bool {

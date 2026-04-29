@@ -72,6 +72,17 @@ type Result struct {
 	// the OpenAI path (Anthropic SDK exposes it differently and is wired
 	// elsewhere); zero when the provider doesn't report.
 	Usage TokenUsage
+	// ReportedStatus is the agent's self-reported task outcome via the
+	// `report_status` MCP tool. Empty when the agent didn't call it
+	// (older safe-ai-util-mcp, or model that ignored the directive).
+	// Valid: "complete", "partial", "blocked". The harness uses this
+	// to decide PR draft-vs-ready, labels, and whether to skip PR
+	// creation when no useful work was done.
+	ReportedStatus string
+	// ReportedReason carries the reason argument the agent passed when
+	// it reported status — usually a short explanation of "why blocked"
+	// or "what's still partial".
+	ReportedReason string
 }
 
 // TokenUsage is a provider-agnostic accumulator. PromptTokens is everything
@@ -93,15 +104,37 @@ func (u *TokenUsage) Add(o TokenUsage) {
 	u.TotalTokens += o.TotalTokens
 }
 
+// captureReportStatus records an agent's report_status tool-call payload on
+// the Result. Last-call-wins if the model invokes the tool more than once
+// (which it shouldn't, but we tolerate it). Best-effort: a malformed or
+// missing-field payload leaves Result fields zero rather than erroring.
+func captureReportStatus(res *Result, argumentsJSON string) {
+	var payload struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(argumentsJSON), &payload); err != nil {
+		return
+	}
+	if payload.Status != "" {
+		res.ReportedStatus = payload.Status
+	}
+	if payload.Reason != "" {
+		res.ReportedReason = payload.Reason
+	}
+}
+
 // defaultAllowedTools is the implementer's tool surface. We deliberately
 // exclude git_* and gh_* — git/PR ops are the harness's job, not the
 // agent's. Test runners (run_*) are included so the agent can verify its
 // own changes.
 var defaultAllowedTools = []string{
-	"fs_read", "fs_write", "fs_glob", "fs_list", "fs_exists",
+	"fs_read", "fs_read_lines", "fs_write", "fs_glob", "fs_list", "fs_exists",
 	"run_make", "run_go_test", "run_go_build", "run_go_vet",
 	"run_npm_test", "run_npm_ci",
 	"py_pytest",
+	// Agent self-report — required at end of loop.
+	"report_status",
 }
 
 // Run drives the implementer loop for one task and returns when Claude

@@ -160,6 +160,12 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, models []stri
 		for _, tc := range toolCalls {
 			res.ToolCallCount++
 			content := executeResponsesToolCall(ctx, opts.MCP, tc)
+			// Capture the agent's structured self-report from
+			// report_status calls so the harness can decide PR
+			// draft-vs-ready downstream.
+			if tc.Name == "report_status" {
+				captureReportStatus(res, tc.Arguments)
+			}
 			nextItems = append(nextItems, responses.ResponseInputItemParamOfFunctionCallOutput(tc.CallID, content))
 		}
 		input = responses.ResponseNewParamsInputUnion{OfInputItemList: nextItems}
