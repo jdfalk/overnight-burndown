@@ -440,12 +440,25 @@ func (r *Runner) publishOutcome(
 	return nil
 }
 
-// filterFreshTasks drops tasks that the state already records as
-// terminal-shipped within the past 24h. Avoids re-attempting yesterday's
-// successes; doesn't filter draft/blocked because those still need
-// re-triage on each run.
+// filterFreshTasks drops tasks we shouldn't re-dispatch tonight:
+//
+//   * shipped within the past 24h — yesterday's successes don't need
+//     a second crack (the source-of-truth git ref already has the
+//     change merged).
+//   * draft / in-flight / open-review — a previous run already opened
+//     a PR (or kicked off an agent) that's still pending. Re-running
+//     would burn triage + agent tokens, the worktree-add would fail
+//     on the existing branch, and the cell would go red without
+//     producing anything new. Drop until the prior PR is merged,
+//     closed, or the local state ages out.
+//
+// The 7-day TTL on draft/in-flight is a safety valve: if a state row
+// gets orphaned (PR was closed manually but state never updated),
+// we retry after a week so the task isn't permanently stuck.
 func (r *Runner) filterFreshTasks(tasks []sources.Task) []sources.Task {
-	cutoff := r.Now().Add(-24 * time.Hour)
+	now := r.Now()
+	shippedCutoff := now.Add(-24 * time.Hour)
+	pendingCutoff := now.Add(-7 * 24 * time.Hour)
 	var out []sources.Task
 	for _, t := range tasks {
 		hash := state.HashTask(t.Source)
@@ -454,8 +467,19 @@ func (r *Runner) filterFreshTasks(tasks []sources.Task) []sources.Task {
 			out = append(out, t)
 			continue
 		}
-		if existing.Status == state.StatusShipped && existing.LastUpdated.After(cutoff) {
-			continue
+		switch existing.Status {
+		case state.StatusShipped:
+			if existing.LastUpdated.After(shippedCutoff) {
+				continue
+			}
+		case state.StatusDraft, state.StatusInFlight:
+			// A PR is open and waiting for review (review/draft-only
+			// modes), or an agent run is mid-flight from a prior
+			// nightly that didn't get a chance to publish. Either way
+			// don't redo the work.
+			if existing.LastUpdated.After(pendingCutoff) {
+				continue
+			}
 		}
 		out = append(out, t)
 	}
