@@ -43,6 +43,11 @@ const (
 	StatusBlocked   Status = "blocked"
 	StatusFailed    Status = "failed"
 	StatusRequeued  Status = "requeued"
+	// StatusNoChange marks a task where the agent ran successfully but
+	// produced no file diff — nothing to commit, no PR. Distinct from
+	// StatusShipped (which implies a merged PR exists) so the digest
+	// can show the difference between "merged" and "agent did nothing".
+	StatusNoChange Status = "no-change"
 )
 
 // IsTerminal reports whether the status represents a final outcome — i.e. the
@@ -50,7 +55,7 @@ const (
 // re-queued by recomputing sources.
 func (s Status) IsTerminal() bool {
 	switch s {
-	case StatusShipped, StatusDraft, StatusBlocked, StatusFailed:
+	case StatusShipped, StatusDraft, StatusBlocked, StatusFailed, StatusNoChange:
 		return true
 	}
 	return false

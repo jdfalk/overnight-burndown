@@ -342,8 +342,11 @@ func (r *Runner) publishOutcome(
 		Message:      buildCommitMessage(oc),
 	})
 	if errors.Is(err, ghops.ErrNoChanges) {
-		// No diff is a successful no-op — task done, nothing to ship.
-		oc.Status = state.StatusShipped
+		// No diff means the agent finished cleanly but produced no
+		// file changes. Distinct from StatusShipped (which implies a
+		// merged PR exists) so the digest can flag agent quality
+		// problems instead of hiding them as successes.
+		oc.Status = state.StatusNoChange
 		return nil
 	}
 	if err != nil {
@@ -477,6 +480,15 @@ func (r *Runner) filterFreshTasks(tasks []sources.Task) []sources.Task {
 			// nightly that didn't get a chance to publish. Either way
 			// don't redo the work.
 			if existing.LastUpdated.After(pendingCutoff) {
+				continue
+			}
+		case state.StatusNoChange:
+			// Agent finished without producing a diff yesterday.
+			// Re-running tonight likely gets the same outcome (the
+			// task as written may not be implementable, or the agent
+			// is consistently misreading it). Skip for 24h to give
+			// the operator time to refine the wording, then retry.
+			if existing.LastUpdated.After(shippedCutoff) {
 				continue
 			}
 		}

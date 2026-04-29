@@ -77,10 +77,11 @@ func Render(in Input) string {
 
 	writeTLDR(&b, in)
 
-	shipped, drafts, blocked, failed := bucketize(in.Outcomes, in.MergedBranches)
+	shipped, drafts, noChange, blocked, failed := bucketize(in.Outcomes, in.MergedBranches)
 
 	writeSection(&b, "Shipped", shipped, in.PRs, formatShipped)
 	writeSection(&b, "Draft PRs awaiting review", drafts, in.PRs, formatDraft)
+	writeSection(&b, "Agent finished but produced no diff", noChange, in.PRs, formatNoChange)
 	writeSection(&b, "Blocked", blocked, in.PRs, formatBlocked)
 	writeSection(&b, "Failed", failed, in.PRs, formatFailed)
 
@@ -107,13 +108,13 @@ func Render(in Input) string {
 
 // writeTLDR writes the always-present one-block summary at the top.
 func writeTLDR(b *strings.Builder, in Input) {
-	shipped, drafts, blocked, failed := bucketize(in.Outcomes, in.MergedBranches)
+	shipped, drafts, noChange, blocked, failed := bucketize(in.Outcomes, in.MergedBranches)
 	dollarPct := in.Stats.FractionSpent() * 100
 	wallPct := in.Stats.FractionElapsed() * 100
 
 	b.WriteString("## TL;DR\n\n")
-	fmt.Fprintf(b, "- **%d shipped** · %d draft · %d blocked · %d failed · %d requeued\n",
-		len(shipped), len(drafts), len(blocked), len(failed), len(in.Requeued))
+	fmt.Fprintf(b, "- **%d shipped** · %d draft · %d no-diff · %d blocked · %d failed · %d requeued\n",
+		len(shipped), len(drafts), len(noChange), len(blocked), len(failed), len(in.Requeued))
 	fmt.Fprintf(b, "- Spend: $%.2f of $%.2f cap (%.0f%%)\n",
 		in.Stats.DollarsSpent, in.Stats.DollarsCap, dollarPct)
 	fmt.Fprintf(b, "- Wall-clock: %s of %s cap (%.0f%%)\n",
@@ -177,6 +178,14 @@ func writeUsage(b *strings.Builder, oc dispatch.Outcome) {
 		oc.AgentResult.Iterations, oc.AgentResult.ToolCallCount)
 }
 
+func formatNoChange(b *strings.Builder, oc dispatch.Outcome, _ PRInfo) {
+	fmt.Fprintf(b, "- `%s` — %s\n", oc.Task.Source.URL, oc.Task.Source.Title)
+	if oc.AgentResult != nil && oc.AgentResult.Summary != "" {
+		fmt.Fprintf(b, "  - **Agent said:** %s\n", oneLine(oc.AgentResult.Summary))
+	}
+	writeUsage(b, oc)
+}
+
 func formatBlocked(b *strings.Builder, oc dispatch.Outcome, _ PRInfo) {
 	fmt.Fprintf(b, "- `%s` — %s\n", oc.Task.Source.URL, oc.Task.Source.Title)
 	fmt.Fprintf(b, "  - **Reason:** %s\n", oc.Decision.Reason)
@@ -224,11 +233,13 @@ func writeSpend(b *strings.Builder, s budget.Stats) {
 //   * draft otherwise (in-flight that didn't merge).
 //
 // Each bucket is sorted by branch for deterministic output.
-func bucketize(items []dispatch.Outcome, merged map[string]bool) (shipped, drafts, blocked, failed []dispatch.Outcome) {
+func bucketize(items []dispatch.Outcome, merged map[string]bool) (shipped, drafts, noChange, blocked, failed []dispatch.Outcome) {
 	for _, oc := range items {
 		switch {
 		case oc.Status == state.StatusFailed:
 			failed = append(failed, oc)
+		case oc.Status == state.StatusNoChange:
+			noChange = append(noChange, oc)
 		case oc.Decision.Classification == triage.ClassBlocked:
 			blocked = append(blocked, oc)
 		case merged[oc.Branch]:
@@ -239,6 +250,7 @@ func bucketize(items []dispatch.Outcome, merged map[string]bool) (shipped, draft
 	}
 	sort.Slice(shipped, func(i, j int) bool { return shipped[i].Branch < shipped[j].Branch })
 	sort.Slice(drafts, func(i, j int) bool { return drafts[i].Branch < drafts[j].Branch })
+	sort.Slice(noChange, func(i, j int) bool { return noChange[i].Task.Source.URL < noChange[j].Task.Source.URL })
 	sort.Slice(blocked, func(i, j int) bool { return blocked[i].Task.Source.URL < blocked[j].Task.Source.URL })
 	sort.Slice(failed, func(i, j int) bool { return failed[i].Branch < failed[j].Branch })
 	return
