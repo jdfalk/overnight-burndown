@@ -26,7 +26,7 @@ permissions:
 jobs:
   prerelease:
     name: Build + publish burndown binary
-    uses: jdfalk/ghcommon/.github/workflows/reusable-release.yml@dac2f695f2d78250fb0bd5330ad9f4f20e408e4a # main (post GH_TOKEN fix)
+    uses: jdfalk/ghcommon/.github/workflows/reusable-release.yml@dd8fae111732e9bdc7fed56a0f4d68cb0fd17d34 # main (post GH_TOKEN fix)
     with:
       release-type: 'auto'
       prerelease: true
