@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/openai/openai-go"
@@ -12,6 +16,70 @@ import (
 
 	"github.com/jdfalk/overnight-burndown/internal/mcp"
 )
+
+// retryAfterRe extracts the "try again in X.Ys" hint OpenAI emits in the
+// 429 body. We honor it (with a small ceiling) instead of always backing
+// off a fixed amount.
+var retryAfterRe = regexp.MustCompile(`try again in ([0-9]+(?:\.[0-9]+)?)s`)
+
+// callOpenAIWithRetry wraps a single Chat Completions call with retry-on-429.
+// We bail out after retryBudget total wait so a wedged matrix cell can't
+// hold the runner forever.
+func callOpenAIWithRetry(ctx context.Context, client openai.Client, params openai.ChatCompletionNewParams) (*openai.ChatCompletion, error) {
+	const retryBudget = 90 * time.Second
+	const baseBackoff = 2 * time.Second
+	const maxBackoff = 30 * time.Second
+	deadline := time.Now().Add(retryBudget)
+	attempt := 0
+	for {
+		attempt++
+		resp, err := client.Chat.Completions.New(ctx, params)
+		if err == nil {
+			return resp, nil
+		}
+		// Anything that doesn't look like a 429 is a hard failure.
+		msg := err.Error()
+		if !strings.Contains(msg, "429") && !strings.Contains(strings.ToLower(msg), "rate limit") {
+			return nil, err
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("rate-limit retries exhausted (last err: %w)", err)
+		}
+		// Honor the explicit hint from OpenAI's 429 body if present.
+		wait := backoffFor(attempt, baseBackoff, maxBackoff)
+		if hinted := parseRetryAfter(msg); hinted > 0 && hinted <= maxBackoff {
+			wait = hinted + 500*time.Millisecond // small jitter
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+func backoffFor(attempt int, base, max time.Duration) time.Duration {
+	d := base
+	for i := 1; i < attempt; i++ {
+		d *= 2
+		if d > max {
+			return max
+		}
+	}
+	return d
+}
+
+func parseRetryAfter(s string) time.Duration {
+	m := retryAfterRe.FindStringSubmatch(s)
+	if len(m) < 2 {
+		return 0
+	}
+	f, err := strconv.ParseFloat(m[1], 64)
+	if err != nil || f <= 0 {
+		return 0
+	}
+	return time.Duration(f * float64(time.Second))
+}
 
 // RunOpenAI is the OpenAI-backed sibling of Run. Same Options shape as the
 // Anthropic path; the Client/Model fields on Options are ignored — the
@@ -45,7 +113,7 @@ func RunOpenAI(ctx context.Context, client openai.Client, model string, opts Opt
 	for i := 0; i < opts.MaxIterations; i++ {
 		res.Iterations = i + 1
 
-		resp, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		resp, err := callOpenAIWithRetry(ctx, client, openai.ChatCompletionNewParams{
 			Model:    openai.ChatModel(model),
 			Messages: messages,
 			Tools:    tools,

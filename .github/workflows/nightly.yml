@@ -226,6 +226,11 @@ jobs:
       image: ghcr.io/jdfalk/burndown-runner-image:bootstrap
     strategy:
       fail-fast: false
+      # OpenAI gpt-5 has 500K TPM on this org; each dispatched task uses
+      # ~30K tokens at peak (iter 5-6 of the agent loop). Running every
+      # cell in parallel saturates the limit and causes 429s. Cap at 8
+      # concurrent cells; remaining cells queue and run in waves.
+      max-parallel: 8
       matrix:
         index: ${{ fromJson(needs.triage.outputs.task_indices) }}
     steps:
