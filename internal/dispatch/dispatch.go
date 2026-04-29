@@ -59,11 +59,13 @@ type Outcome struct {
 	Branch       string        // empty if the task never made it to worktree creation
 	WorktreePath string        // present even on failure for postmortem inspection
 	AgentResult  *agent.Result // present on success
-	// Model is the model ID that actually ran the agent (e.g.
-	// "codex-mini", "gpt-5.3-codex"). Copied from AgentResult.Model so
-	// callers don't need to nil-check AgentResult to apply the label.
+	// Model is the final model that completed (or gave up on) the run.
+	// Copied from AgentResult.Model so callers don't need to nil-check.
 	Model string
-	Error string // populated when Status == failed
+	// AttemptedModels mirrors AgentResult.AttemptedModels: every model that
+	// was tried, in order. One entry means no escalation occurred.
+	AttemptedModels []string
+	Error           string // populated when Status == failed
 }
 
 // SpawnMCPFunc returns an MCPClient configured to act on the given
@@ -204,6 +206,7 @@ func (d *Dispatcher) runOne(ctx context.Context, item TaskWithDecision, branch s
 
 	out.AgentResult = res
 	out.Model = res.Model
+	out.AttemptedModels = res.AttemptedModels
 	out.Status = state.StatusInFlight // agent finished; PR creation pending in step 9
 	return out
 }

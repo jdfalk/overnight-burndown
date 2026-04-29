@@ -352,6 +352,61 @@ func TestSelectModel_FallsBackWhenNoMatch(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// FallbacksFrom
+// ---------------------------------------------------------------------------
+
+func TestFallbacksFrom_NoTiers(t *testing.T) {
+	f := LLMFeatureConfig{Model: "gpt-5"}
+	if got := f.FallbacksFrom(3); got != nil {
+		t.Errorf("no tiers: got %v, want nil", got)
+	}
+}
+
+func TestFallbacksFrom_AtHighestTier(t *testing.T) {
+	f := LLMFeatureConfig{ModelTiers: []ModelTier{
+		{Model: "mini", MaxComplexity: 2},
+		{Model: "mid", MaxComplexity: 4},
+		{Model: "heavy"}, // catch-all
+	}}
+	// Complexity 5 → selects "heavy" (highest tier) → no fallbacks.
+	if got := f.FallbacksFrom(5); got != nil {
+		t.Errorf("highest tier: got %v, want nil", got)
+	}
+}
+
+func TestFallbacksFrom_ReturnsTiersAboveSelected(t *testing.T) {
+	f := LLMFeatureConfig{ModelTiers: []ModelTier{
+		{Model: "mini", MaxComplexity: 2},
+		{Model: "mid", MaxComplexity: 4},
+		{Model: "heavy"},
+	}}
+	// Complexity 1 → selects "mini" → fallbacks are mid + heavy.
+	got := f.FallbacksFrom(1)
+	want := []string{"mid", "heavy"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestFallbacksFrom_MiddleTier(t *testing.T) {
+	f := LLMFeatureConfig{ModelTiers: []ModelTier{
+		{Model: "mini", MaxComplexity: 2},
+		{Model: "mid", MaxComplexity: 4},
+		{Model: "heavy"},
+	}}
+	// Complexity 3 → selects "mid" → only "heavy" as fallback.
+	got := f.FallbacksFrom(3)
+	if len(got) != 1 || got[0] != "heavy" {
+		t.Errorf("middle tier: got %v, want [heavy]", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // lookup helper
 // ---------------------------------------------------------------------------
 

@@ -62,10 +62,15 @@ type Options struct {
 type Result struct {
 	Iterations int
 	StopReason anthropic.StopReason
-	// Model is the model ID that was actually used for this run. Populated
-	// by all three agent runners so the harness can apply a model:<name>
-	// label for training-signal collection.
+	// Model is the final model ID that completed the run. When fallback
+	// escalation occurred, this is the last model in the chain.
 	Model string
+	// AttemptedModels records every model that was tried for this run in
+	// order. Most tasks have one entry (no escalation); when a model
+	// exhausts its retry budget the next tier is appended before the swap.
+	// Used to apply one model:<slug> label per attempt so we can find PRs
+	// that needed escalation.
+	AttemptedModels []string
 	// Summary is the agent's final assistant text — captured for the
 	// morning digest and the PR body.
 	Summary string
@@ -167,7 +172,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		anthropic.NewUserMessage(anthropic.NewTextBlock(buildUserMessage(opts))),
 	}
 
-	res := &Result{Model: string(opts.Model)}
+	res := &Result{Model: string(opts.Model), AttemptedModels: []string{string(opts.Model)}}
 	for i := 0; i < opts.MaxIterations; i++ {
 		res.Iterations = i + 1
 
