@@ -147,7 +147,20 @@ const (
 type LLMFeatureConfig struct {
 	Provider ProviderName `yaml:"provider"`
 	Model    string       `yaml:"model"`
+	// API selects the OpenAI endpoint to call. Empty / "responses" uses
+	// /v1/responses (default). "chat-completions" uses the legacy
+	// /v1/chat/completions path; kept while we soak the Responses
+	// migration. Ignored when Provider != openai.
+	API OpenAIAPIName `yaml:"api,omitempty"`
 }
+
+// OpenAIAPIName chooses which OpenAI endpoint we hit for a feature.
+type OpenAIAPIName string
+
+const (
+	OpenAIAPIResponses       OpenAIAPIName = "responses"
+	OpenAIAPIChatCompletions OpenAIAPIName = "chat-completions"
+)
 
 // GitHubConfig holds App-based authentication settings. All three fields are
 // required for any repo not in dry-run mode.

@@ -213,8 +213,19 @@ func pickRunAgent(cfg *config.Config, providers *providerClients) (dispatch.RunA
 	case config.ProviderOpenAI:
 		client := providers.openai
 		model := providers.openaiModel
+		// Default to the Responses API. PreviousResponseID lets the agent
+		// loop avoid re-sending the full conversation each iter, which
+		// previously exhausted TPM at modest concurrency. Set
+		// implementer.api: chat-completions in config.yaml to fall back
+		// to the legacy path while we soak the migration. Spec:
+		// docs/specs/2026-04-29-responses-api-migration.md.
+		if cfg.Implementer.API == config.OpenAIAPIChatCompletions {
+			return func(ctx context.Context, opts agent.Options) (*agent.Result, error) {
+				return agent.RunOpenAI(ctx, client, model, opts)
+			}, nil
+		}
 		return func(ctx context.Context, opts agent.Options) (*agent.Result, error) {
-			return agent.RunOpenAI(ctx, client, model, opts)
+			return agent.RunOpenAIResponses(ctx, client, model, opts)
 		}, nil
 	case config.ProviderAnthropic:
 		// agent.Run reads opts.Client and opts.Model that the dispatcher

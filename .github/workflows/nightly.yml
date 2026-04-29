@@ -235,10 +235,12 @@ jobs:
       image: ghcr.io/jdfalk/burndown-runner-image:bootstrap
     strategy:
       fail-fast: false
-      # OpenAI gpt-5 has 500K TPM on this org; each dispatched task uses
-      # ~30K tokens at peak (iter 5-6 of the agent loop). Running every
-      # cell in parallel saturates the limit and causes 429s. Cap at 8
-      # concurrent cells; remaining cells queue and run in waves.
+      # The agent uses /v1/responses with PreviousResponseID, so iter N+1
+      # only sends the new function_call_output items — full history
+      # stays server-side. That collapses per-call token cost and lets us
+      # safely run 8 cells in parallel under codex-mini's TPM bucket.
+      # Lower if 429s recur; raise after observing token usage in a few
+      # nightlies.
       max-parallel: 8
       matrix:
         index: ${{ fromJson(needs.triage.outputs.task_indices) }}

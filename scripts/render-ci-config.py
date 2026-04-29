@@ -48,11 +48,15 @@ triage:
 
 implementer:
   provider: openai
-  # gpt-5.4-mini: recent, chat-completions-compatible, mini-tier TPM
-  # (separate bucket from full gpt-5), good at code generation.
-  # NOTE: avoid *-codex* variants — those are /v1/responses-only and our
-  # agent uses /v1/chat/completions.
-  model: gpt-5.4-mini
+  # The agent now uses /v1/responses by default (see internal/agent/
+  # openai_responses.go) — the codex-mini variant is unblocked. It's
+  # tuned for code generation, has a separate TPM bucket from the
+  # general gpt-5 chat models, and PreviousResponseID means we don't
+  # resend full history every iter. Together that gives us substantial
+  # headroom for the matrix.
+  model: gpt-5.1-codex-mini
+  # api: responses  (default — uncomment + set to chat-completions to
+  # fall back to the legacy path during the soak window).
 
 paths:
   state_dir: {tmp}/burndown-state
