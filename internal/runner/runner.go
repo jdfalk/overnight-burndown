@@ -239,6 +239,17 @@ func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t triag
 		ghClient = r.NewGitHub(nil)
 	}
 
+	// Reconcile: patch state holes from crashed/incomplete prior runs by
+	// querying open automation-labeled PRs on GitHub. Best-effort — a
+	// reconcile failure (e.g. rate limit) is logged but does not abort the
+	// run; we'd rather re-dispatch than silently skip the repo.
+	if r.Config.GitHub.AppID != 0 {
+		if err := ReconcileFromGitHub(ctx, ghClient, r.State,
+			repoCfg.Owner, repoCfg.Name); err != nil {
+			fmt.Fprintf(os.Stderr, "runner: reconcile: %v\n", err)
+		}
+	}
+
 	// Collect.
 	collectors := []sources.Collector{
 		sources.NewTODOCollector(),
@@ -265,7 +276,7 @@ func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t triag
 	for i := range tasks {
 		items[i] = dispatch.TaskWithDecision{Task: tasks[i], Decision: decisions[i]}
 		r.State.Upsert(&state.TaskState{
-			Hash:           tasks[i].Source.ContentHash,
+			Hash:           state.HashTask(tasks[i].Source),
 			Source:         tasks[i].Source,
 			Status:         state.StatusQueued,
 			Classification: string(decisions[i].Classification),
@@ -305,6 +316,10 @@ func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t triag
 	// ghops sequence per outcome.
 	pub := r.NewPublisher(ghClient, ts, repoCfg)
 
+	// Merge any PRs that a human or review bot approved via the
+	// "merge-approved" label since the last nightly. Best-effort.
+	r.mergeApprovedPRs(ctx, pub, ghClient, repoCfg.Owner, repoCfg.Name, out.MergedBranches)
+
 	for i := range outcomes {
 		if abort, _ := b.ShouldAbort(); abort {
 			// Remaining tasks were dispatched but we won't publish them.
@@ -318,6 +333,17 @@ func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t triag
 			outcomes[i].Status = state.StatusFailed
 			outcomes[i].Error = err.Error()
 		}
+		// Persist final status + PR info so future runs don't re-dispatch.
+		prInfo := out.PRs[outcomes[i].Branch]
+		r.State.Upsert(&state.TaskState{
+			Hash:           state.HashTask(items[i].Task.Source),
+			Source:         items[i].Task.Source,
+			Status:         outcomes[i].Status,
+			Branch:         outcomes[i].Branch,
+			PRNumber:       prInfo.Number,
+			PRURL:          prInfo.URL,
+			Classification: string(items[i].Decision.Classification),
+		})
 	}
 	out.Outcomes = outcomes
 	return out, nil
