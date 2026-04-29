@@ -1,0 +1,84 @@
+# file: .goreleaser.yml
+# version: 1.0.0
+# guid: 8e7d6c5b-4a3b-2c1d-9e8f-7a6b5c4d3e2f
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod download
+
+builds:
+  - id: burndown
+    main: ./cmd/burndown
+    binary: burndown_{{ title .Os }}_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/jdfalk/overnight-burndown/internal/version.version={{.Version}}
+      - -X github.com/jdfalk/overnight-burndown/internal/version.commit={{.Commit}}
+      - -X github.com/jdfalk/overnight-burndown/internal/version.date={{.Date}}
+
+archives:
+  - id: burndown-archive
+    formats:
+      - tar.gz
+    name_template: >-
+      burndown_{{ .Version }}_{{ title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - LICENSE*
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Performance
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Refactoring
+      regexp: '^.*?refactor(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "merge conflict"
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+
+release:
+  disable: false
+  prerelease: auto
+  name_template: "{{.ProjectName}} v{{.Version}}"
+  header: |
+    ## overnight-burndown v{{.Version}}
+  footer: |
+    **Full Changelog**: https://github.com/jdfalk/overnight-burndown/compare/{{ .PreviousTag }}...{{ .Tag }}

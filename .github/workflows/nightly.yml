@@ -86,9 +86,35 @@ jobs:
             exit 1
           fi
 
-      - name: Build burndown
-        working-directory: burndown
-        run: go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown
+      - name: Download burndown binary (latest prerelease)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Pull the most recent release (incl. prereleases) and grab the
+          # Linux/x86_64 archive — the runner image is amd64. Falls back to
+          # `go build` if no release exists yet so the matrix isn't blocked
+          # while the prerelease workflow is bootstrapping.
+          tag=$(gh release list --repo jdfalk/overnight-burndown --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [ -z "$tag" ]; then
+            echo "::warning::no overnight-burndown release found; falling back to go build"
+            ( cd burndown && go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown )
+            exit 0
+          fi
+          asset=$(gh release view "$tag" --repo jdfalk/overnight-burndown --json assets \
+            --jq '.assets[].name' | grep -E "burndown_.*_Linux_x86_64\\.tar\\.gz$" | head -1)
+          if [ -z "$asset" ]; then
+            echo "::error::release $tag has no Linux/x86_64 archive"
+            exit 1
+          fi
+          tmp=$(mktemp -d)
+          gh release download "$tag" --repo jdfalk/overnight-burndown --pattern "$asset" --dir "$tmp"
+          tar -xzf "$tmp/$asset" -C "$tmp"
+          # Archive contains a binary named burndown_Linux_x86_64; rename to plain `burndown`.
+          mv "$tmp/burndown_Linux_x86_64" "$RUNNER_TEMP/burndown"
+          chmod +x "$RUNNER_TEMP/burndown"
+          rm -rf "$tmp"
+          "$RUNNER_TEMP/burndown" --version || true
 
       - name: Materialize GitHub App key
         env:
@@ -199,9 +225,35 @@ jobs:
             !/testdata/audio/
           sparse-checkout-cone-mode: false
 
-      - name: Build burndown
-        working-directory: burndown
-        run: go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown
+      - name: Download burndown binary (latest prerelease)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Pull the most recent release (incl. prereleases) and grab the
+          # Linux/x86_64 archive — the runner image is amd64. Falls back to
+          # `go build` if no release exists yet so the matrix isn't blocked
+          # while the prerelease workflow is bootstrapping.
+          tag=$(gh release list --repo jdfalk/overnight-burndown --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [ -z "$tag" ]; then
+            echo "::warning::no overnight-burndown release found; falling back to go build"
+            ( cd burndown && go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown )
+            exit 0
+          fi
+          asset=$(gh release view "$tag" --repo jdfalk/overnight-burndown --json assets \
+            --jq '.assets[].name' | grep -E "burndown_.*_Linux_x86_64\\.tar\\.gz$" | head -1)
+          if [ -z "$asset" ]; then
+            echo "::error::release $tag has no Linux/x86_64 archive"
+            exit 1
+          fi
+          tmp=$(mktemp -d)
+          gh release download "$tag" --repo jdfalk/overnight-burndown --pattern "$asset" --dir "$tmp"
+          tar -xzf "$tmp/$asset" -C "$tmp"
+          # Archive contains a binary named burndown_Linux_x86_64; rename to plain `burndown`.
+          mv "$tmp/burndown_Linux_x86_64" "$RUNNER_TEMP/burndown"
+          chmod +x "$RUNNER_TEMP/burndown"
+          rm -rf "$tmp"
+          "$RUNNER_TEMP/burndown" --version || true
 
       - name: Download triage artifact
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
@@ -271,9 +323,35 @@ jobs:
         with:
           path: burndown
 
-      - name: Build burndown
-        working-directory: burndown
-        run: go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown
+      - name: Download burndown binary (latest prerelease)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Pull the most recent release (incl. prereleases) and grab the
+          # Linux/x86_64 archive — the runner image is amd64. Falls back to
+          # `go build` if no release exists yet so the matrix isn't blocked
+          # while the prerelease workflow is bootstrapping.
+          tag=$(gh release list --repo jdfalk/overnight-burndown --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [ -z "$tag" ]; then
+            echo "::warning::no overnight-burndown release found; falling back to go build"
+            ( cd burndown && go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown )
+            exit 0
+          fi
+          asset=$(gh release view "$tag" --repo jdfalk/overnight-burndown --json assets \
+            --jq '.assets[].name' | grep -E "burndown_.*_Linux_x86_64\\.tar\\.gz$" | head -1)
+          if [ -z "$asset" ]; then
+            echo "::error::release $tag has no Linux/x86_64 archive"
+            exit 1
+          fi
+          tmp=$(mktemp -d)
+          gh release download "$tag" --repo jdfalk/overnight-burndown --pattern "$asset" --dir "$tmp"
+          tar -xzf "$tmp/$asset" -C "$tmp"
+          # Archive contains a binary named burndown_Linux_x86_64; rename to plain `burndown`.
+          mv "$tmp/burndown_Linux_x86_64" "$RUNNER_TEMP/burndown"
+          chmod +x "$RUNNER_TEMP/burndown"
+          rm -rf "$tmp"
+          "$RUNNER_TEMP/burndown" --version || true
 
       - name: Download triage artifact
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8

@@ -1,0 +1,37 @@
+# file: .github/workflows/prerelease.yml
+# version: 1.0.0
+# guid: 9f8e7d6c-5b4a-3c2d-1e0f-9a8b7c6d5e4f
+
+name: Prerelease on Merge
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/workflows/nightly.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: prerelease-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  prerelease:
+    name: Build + publish burndown binary
+    uses: jdfalk/ghcommon/.github/workflows/reusable-release.yml@dac2f695f2d78250fb0bd5330ad9f4f20e408e4a # main (post GH_TOKEN fix)
+    with:
+      release-type: 'auto'
+      prerelease: true
+      draft: false
+      go-enabled: true
+      docker-enabled: false
+      build-target: 'go'
+    secrets: inherit
