@@ -290,6 +290,15 @@ jobs:
           fi
           cp "$RUNNER_TEMP/triage/state.json" "$RUNNER_TEMP/burndown-state/state.json" 2>/dev/null || true
 
+      - name: Materialize GitHub App key
+        env:
+          BURNDOWN_BOT_PRIVATE_KEY: ${{ secrets.BURNDOWN_BOT_PRIVATE_KEY }}
+        run: |
+          [ -z "$BURNDOWN_BOT_PRIVATE_KEY" ] && exit 0
+          mkdir -p "$RUNNER_TEMP/keys" && chmod 700 "$RUNNER_TEMP/keys"
+          printf '%s\n' "$BURNDOWN_BOT_PRIVATE_KEY" > "$RUNNER_TEMP/keys/burndown-bot.pem"
+          chmod 600 "$RUNNER_TEMP/keys/burndown-bot.pem"
+
       - name: Render OpenAI config
         env:
           MODE: ${{ inputs.mode || 'dry-run' }}
@@ -305,15 +314,6 @@ jobs:
             unset GH_APP_ID GH_APP_INSTALLATION_ID GH_APP_PEM_PATH
           fi
           python3 burndown/scripts/render-ci-config.py --out "$RUNNER_TEMP/config.yaml" >/dev/null
-
-      - name: Materialize GitHub App key
-        env:
-          BURNDOWN_BOT_PRIVATE_KEY: ${{ secrets.BURNDOWN_BOT_PRIVATE_KEY }}
-        run: |
-          [ -z "$BURNDOWN_BOT_PRIVATE_KEY" ] && exit 0
-          mkdir -p "$RUNNER_TEMP/keys" && chmod 700 "$RUNNER_TEMP/keys"
-          printf '%s\n' "$BURNDOWN_BOT_PRIVATE_KEY" > "$RUNNER_TEMP/keys/burndown-bot.pem"
-          chmod 600 "$RUNNER_TEMP/keys/burndown-bot.pem"
 
       - name: Dispatch task ${{ matrix.index }} (OpenAI)
         env:
@@ -418,6 +418,15 @@ jobs:
           fi
           cp "$RUNNER_TEMP/triage/state.json" "$RUNNER_TEMP/burndown-state/state.json" 2>/dev/null || true
 
+      - name: Materialize GitHub App key
+        env:
+          BURNDOWN_BOT_PRIVATE_KEY: ${{ secrets.BURNDOWN_BOT_PRIVATE_KEY }}
+        run: |
+          [ -z "$BURNDOWN_BOT_PRIVATE_KEY" ] && exit 0
+          mkdir -p "$RUNNER_TEMP/keys" && chmod 700 "$RUNNER_TEMP/keys"
+          printf '%s\n' "$BURNDOWN_BOT_PRIVATE_KEY" > "$RUNNER_TEMP/keys/burndown-bot.pem"
+          chmod 600 "$RUNNER_TEMP/keys/burndown-bot.pem"
+
       - name: Render Claude config
         env:
           MODE: ${{ inputs.mode || 'dry-run' }}
@@ -433,15 +442,6 @@ jobs:
             unset GH_APP_ID GH_APP_INSTALLATION_ID GH_APP_PEM_PATH
           fi
           python3 burndown/scripts/render-ci-config.py --out "$RUNNER_TEMP/config.yaml" >/dev/null
-
-      - name: Materialize GitHub App key
-        env:
-          BURNDOWN_BOT_PRIVATE_KEY: ${{ secrets.BURNDOWN_BOT_PRIVATE_KEY }}
-        run: |
-          [ -z "$BURNDOWN_BOT_PRIVATE_KEY" ] && exit 0
-          mkdir -p "$RUNNER_TEMP/keys" && chmod 700 "$RUNNER_TEMP/keys"
-          printf '%s\n' "$BURNDOWN_BOT_PRIVATE_KEY" > "$RUNNER_TEMP/keys/burndown-bot.pem"
-          chmod 600 "$RUNNER_TEMP/keys/burndown-bot.pem"
 
       - name: Dispatch task ${{ matrix.index }} (Claude)
         env:

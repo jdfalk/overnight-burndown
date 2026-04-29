@@ -117,7 +117,7 @@ func cmdDispatchOne(args []string) int {
 		mt.Item.Decision.SuggestedBranch += "--" + *branchSuffix
 	}
 
-	r, err := buildRunnerFromConfig(*configPath, false)
+	r, err := buildRunnerForDispatch(*configPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "burndown dispatch-one:", err)
 		return 1
@@ -270,6 +270,43 @@ func buildRunnerFromConfig(configPath string, dryRun bool) (*runner.Runner, erro
 
 func buildRunnerNoValidate(configPath string, dryRun bool) (*runner.Runner, error) {
 	return buildRunner(configPath, dryRun, false)
+}
+
+// buildRunnerForDispatch builds a Runner for dispatch-one. Unlike
+// buildRunnerFromConfig, it calls buildProviderClientsForDispatch so only
+// the implementer-provider credentials are required. The rendered config
+// always specifies triage.provider=openai, but dispatch-one never calls
+// triage — so requiring OPENAI_API_KEY in a Claude-only dispatch cell would
+// be wrong.
+func buildRunnerForDispatch(configPath string) (*runner.Runner, error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	st, err := state.LoadDir(cfg.Paths.StateDir)
+	if err != nil {
+		return nil, fmt.Errorf("load state: %w", err)
+	}
+	if n := st.MarkStale(state.InFlightTTL, time.Now().UTC()); n > 0 {
+		fmt.Fprintf(os.Stderr, "burndown: expired %d stale in-flight task(s) (TTL=%v)\n", n, state.InFlightTTL)
+	}
+
+	providers, err := buildProviderClientsForDispatch(cfg)
+	if err != nil {
+		return nil, err
+	}
+	runAgent, err := pickRunAgent(cfg, providers)
+	if err != nil {
+		return nil, err
+	}
+	return &runner.Runner{
+		Config:    *cfg,
+		State:     st,
+		Anthropic: providers.anthropic,
+		SpawnMCP:  defaultSpawnMCP(cfg),
+		RunAgent:  runAgent,
+	}, nil
 }
 
 // buildRunnerForAggregate builds a minimal Runner that only needs
