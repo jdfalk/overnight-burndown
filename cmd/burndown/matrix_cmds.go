@@ -183,7 +183,7 @@ func cmdAggregate(args []string) int {
 		outcomes = append(outcomes, *oc)
 	}
 
-	r, err := buildRunnerFromConfig(*configPath, false)
+	r, err := buildRunnerNoValidate(*configPath, false)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "burndown aggregate:", err)
 		return 1
@@ -229,8 +229,24 @@ func cmdAggregate(args []string) int {
 // buildRunnerFromConfig is the shared `*runner.Runner` constructor for
 // every matrix subcommand. It mirrors cmdRun's setup minus the actual
 // `r.Run()` call so each subcommand can call its own entry point.
+//
+// validate=true runs config.Load (full Validate on local_path / private key);
+// validate=false uses LoadNoValidate so read-only commands (aggregate) can
+// run on a host that doesn't have the source repos checked out.
 func buildRunnerFromConfig(configPath string, dryRun bool) (*runner.Runner, error) {
-	cfg, err := config.Load(configPath)
+	return buildRunner(configPath, dryRun, true)
+}
+
+func buildRunnerNoValidate(configPath string, dryRun bool) (*runner.Runner, error) {
+	return buildRunner(configPath, dryRun, false)
+}
+
+func buildRunner(configPath string, dryRun, validate bool) (*runner.Runner, error) {
+	loader := config.Load
+	if !validate {
+		loader = config.LoadNoValidate
+	}
+	cfg, err := loader(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}

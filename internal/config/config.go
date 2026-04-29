@@ -226,9 +226,25 @@ func LoadBytes(data []byte) (*Config, error) {
 }
 
 func parse(data []byte) (*Config, error) {
+	c, err := parseNoValidate(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// parseNoValidate is the shared decode + defaults + path-expand pipeline
+// without the Validate() check. The aggregate subcommand uses this because
+// it operates on JSON outcomes from prior phases — local_path / private_key
+// don't need to exist on the aggregate runner, only on the triage and
+// dispatch runners.
+func parseNoValidate(data []byte) (*Config, error) {
 	var c Config
 	dec := yaml.NewDecoder(strings.NewReader(string(data)))
-	dec.KnownFields(true) // surface typos in keys
+	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("config: parse: %w", err)
 	}
@@ -236,10 +252,19 @@ func parse(data []byte) (*Config, error) {
 		return nil, err
 	}
 	c.applyDefaults()
-	if err := c.Validate(); err != nil {
-		return nil, err
-	}
 	return &c, nil
+}
+
+// LoadNoValidate reads a config file and applies defaults but skips the
+// Validate() step that asserts on-disk paths exist. Use it for read-only
+// commands like aggregate that consume already-collected outcomes and
+// don't touch the source repos.
+func LoadNoValidate(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("config: read %q: %w", path, err)
+	}
+	return parseNoValidate(data)
 }
 
 // expandPaths replaces leading "~/" or "~" in every path-shaped field with $HOME.
