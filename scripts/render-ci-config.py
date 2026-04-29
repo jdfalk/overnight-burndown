@@ -42,11 +42,18 @@ openai:
 
 triage:
   provider: openai
-  model: gpt-5
+  # gpt-5-mini is plenty for triage classification + branch-name-suggestion;
+  # cheaper and lower-token-per-call than full gpt-5 so it doesn't compete
+  # for TPM with the implementer.
+  model: gpt-5-mini
 
 implementer:
   provider: openai
-  model: gpt-5
+  # codex-mini variant: optimized for code generation, lower per-call token
+  # cost than full gpt-5, and on a separate TPM bucket from the
+  # general-purpose chat models. Lets the matrix run more cells in parallel
+  # without saturating any single bucket.
+  model: gpt-5.1-codex-mini
 
 paths:
   state_dir: {tmp}/burndown-state

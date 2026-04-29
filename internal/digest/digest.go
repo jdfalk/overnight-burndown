@@ -145,6 +145,7 @@ func formatShipped(b *strings.Builder, oc dispatch.Outcome, pr PRInfo) {
 	if oc.AgentResult != nil && oc.AgentResult.Summary != "" {
 		fmt.Fprintf(b, "  - %s\n", oneLine(oc.AgentResult.Summary))
 	}
+	writeUsage(b, oc)
 }
 
 func formatDraft(b *strings.Builder, oc dispatch.Outcome, pr PRInfo) {
@@ -157,6 +158,23 @@ func formatDraft(b *strings.Builder, oc dispatch.Outcome, pr PRInfo) {
 	if oc.AgentResult != nil && oc.AgentResult.Summary != "" {
 		fmt.Fprintf(b, "  - **Summary:** %s\n", oneLine(oc.AgentResult.Summary))
 	}
+	writeUsage(b, oc)
+}
+
+// writeUsage appends a token-usage line to the entry when the outcome
+// includes an AgentResult with non-zero usage. Skipped when zero so cells
+// from providers that don't expose usage don't show a noisy "0 / 0" line.
+func writeUsage(b *strings.Builder, oc dispatch.Outcome) {
+	if oc.AgentResult == nil {
+		return
+	}
+	u := oc.AgentResult.Usage
+	if u.TotalTokens == 0 && u.PromptTokens == 0 && u.CompletionTokens == 0 {
+		return
+	}
+	fmt.Fprintf(b, "  - **Tokens:** %d prompt / %d completion / %d cached / %d total (iter=%d, tools=%d)\n",
+		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.TotalTokens,
+		oc.AgentResult.Iterations, oc.AgentResult.ToolCallCount)
 }
 
 func formatBlocked(b *strings.Builder, oc dispatch.Outcome, _ PRInfo) {
@@ -176,6 +194,7 @@ func formatFailed(b *strings.Builder, oc dispatch.Outcome, pr PRInfo) {
 	if oc.WorktreePath != "" {
 		fmt.Fprintf(b, "  - Worktree retained: `%s`\n", oc.WorktreePath)
 	}
+	writeUsage(b, oc)
 }
 
 // writeSpend renders the cost breakdown at the bottom.

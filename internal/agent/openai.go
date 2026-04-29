@@ -125,6 +125,15 @@ func RunOpenAI(ctx context.Context, client openai.Client, model string, opts Opt
 			return nil, fmt.Errorf("agent: openai response has no choices (iter %d)", res.Iterations)
 		}
 
+		// Token-usage accounting before processing the message. OpenAI sets
+		// CachedTokens under PromptTokensDetails when prompt caching kicks in.
+		res.Usage.Add(TokenUsage{
+			PromptTokens:     resp.Usage.PromptTokens,
+			CompletionTokens: resp.Usage.CompletionTokens,
+			CachedTokens:     resp.Usage.PromptTokensDetails.CachedTokens,
+			TotalTokens:      resp.Usage.TotalTokens,
+		})
+
 		choice := resp.Choices[0]
 		msg := choice.Message
 		// StopReason is OpenAI's finish_reason ("stop", "tool_calls", "length", ...).

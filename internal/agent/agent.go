@@ -68,6 +68,29 @@ type Result struct {
 	// ToolCallCount is the total number of MCP tool calls the agent made
 	// across the loop. Used for digest reporting.
 	ToolCallCount int
+	// Usage is the token-count accumulator across the loop. Populated by
+	// the OpenAI path (Anthropic SDK exposes it differently and is wired
+	// elsewhere); zero when the provider doesn't report.
+	Usage TokenUsage
+}
+
+// TokenUsage is a provider-agnostic accumulator. PromptTokens is everything
+// sent to the model (cached + uncached); CachedTokens is the cached subset
+// when the provider exposes it. CompletionTokens is model output.
+type TokenUsage struct {
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	CachedTokens     int64 `json:"cached_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+}
+
+// Add accumulates another TokenUsage's values into this one. Called per
+// agent-loop iteration.
+func (u *TokenUsage) Add(o TokenUsage) {
+	u.PromptTokens += o.PromptTokens
+	u.CompletionTokens += o.CompletionTokens
+	u.CachedTokens += o.CachedTokens
+	u.TotalTokens += o.TotalTokens
 }
 
 // defaultAllowedTools is the implementer's tool surface. We deliberately

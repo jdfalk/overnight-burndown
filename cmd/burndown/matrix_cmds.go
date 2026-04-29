@@ -133,6 +133,12 @@ func cmdDispatchOne(args []string) int {
 	}
 	fmt.Printf("burndown dispatch-one: %s → %s (%s)\n",
 		mt.Item.Task.Source.Title, oc.Status, oc.Branch)
+	if oc.AgentResult != nil {
+		u := oc.AgentResult.Usage
+		fmt.Printf("burndown dispatch-one: tokens prompt=%d completion=%d cached=%d total=%d (iter=%d, tools=%d)\n",
+			u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.TotalTokens,
+			oc.AgentResult.Iterations, oc.AgentResult.ToolCallCount)
+	}
 
 	// Reflect the outcome in the exit code so a matrix cell with a failed
 	// agent shows red in the GH Actions UI rather than green-with-failure-
