@@ -234,14 +234,14 @@ func pickRunAgent(cfg *config.Config, providers *providerClients) (dispatch.RunA
 			return agent.RunOpenAIResponses(ctx, client, chain, opts)
 		}, nil
 	case config.ProviderAnthropic:
-		// agent.Run reads opts.Client and opts.Model that the dispatcher
-		// fills from runner.Anthropic and config.Implementer.Model.
-		// Override Model on Options here so it matches Implementer.Model
-		// regardless of what the dispatcher fills in (the dispatcher
-		// currently uses Anthropic.ImplementerModel for legacy reasons).
-		model := anthropic.Model(cfg.Implementer.Model)
+		// Tier selection: use the cheapest Claude model that should handle
+		// this complexity. Falls back to implementer.model when model_tiers
+		// is empty. No runtime fallback chain — Anthropic has no
+		// PreviousResponseID equivalent, so a mid-task model swap would
+		// require re-uploading the full history (same cost as starting over).
 		return func(ctx context.Context, opts agent.Options) (*agent.Result, error) {
-			opts.Model = model
+			selected := cfg.Implementer.SelectModel(opts.Decision.EstComplexity)
+			opts.Model = anthropic.Model(selected)
 			return agent.Run(ctx, opts)
 		}, nil
 	default:
