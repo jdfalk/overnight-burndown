@@ -382,6 +382,32 @@ func (r *Runner) publishOutcome(
 	prs map[string]digest.PRInfo,
 	merged map[string]bool,
 ) error {
+	// Agent's self-reported task status (via report_status MCP tool) is
+	// checked first — before any git operations. If the agent couldn't
+	// finish, opening a PR would block re-dispatch (the state row would
+	// sit as StatusDraft/StatusBlocked and filterFreshTasks would skip it).
+	// Instead: discard the worktree changes, set a non-PR status, and let
+	// the scheduler decide whether to retry.
+	//
+	//   reported=blocked  → StatusBlocked (terminal; needs human to resolve
+	//                        the underlying issue before the task is viable)
+	//   reported=partial  → StatusRequeued (retry next night)
+	//   reported=complete → proceed to commit+push+PR
+	//   reported=""       → proceed (agent didn't call report_status;
+	//                        treat as complete for backward compat)
+	reported := ""
+	if oc.AgentResult != nil {
+		reported = strings.ToLower(strings.TrimSpace(oc.AgentResult.ReportedStatus))
+	}
+	switch reported {
+	case "blocked":
+		oc.Status = state.StatusBlocked
+		return nil
+	case "partial":
+		oc.Status = state.StatusRequeued
+		return nil
+	}
+
 	// Commit + push.
 	err := pub.CommitAndPush(ctx, ghops.CommitOptions{
 		WorktreePath: oc.WorktreePath,
@@ -400,27 +426,13 @@ func (r *Runner) publishOutcome(
 		return fmt.Errorf("commit/push: %w", err)
 	}
 
-	// Agent's self-reported task status (via report_status MCP tool) is
-	// the strongest signal we have for whether the work is actually done.
-	// "blocked" or "partial" force draft regardless of mode; "complete"
-	// honors mode. Empty means the agent didn't call report_status (older
-	// MCP, or the model ignored the directive) — fall through to mode-based
-	// defaults.
-	reported := ""
-	if oc.AgentResult != nil {
-		reported = strings.ToLower(strings.TrimSpace(oc.AgentResult.ReportedStatus))
-	}
-
 	// Open PR. Draft state:
-	//   reported=blocked|partial → draft (regardless of mode)
 	//   draft-only mode          → draft
 	//   review mode              → ready-for-review
 	//   full + SAFE + complete   → ready-for-review (will auto-merge if CI green)
 	//   full + non-SAFE          → draft
 	var isDraft bool
 	switch {
-	case reported == "blocked" || reported == "partial":
-		isDraft = true
 	case repoCfg.Mode == config.ModeDraftOnly:
 		isDraft = true
 	case repoCfg.Mode == config.ModeReview:
@@ -458,12 +470,6 @@ func (r *Runner) publishOutcome(
 	// even though the PR isn't literally a draft on GitHub — the digest
 	// vocabulary doesn't currently distinguish.
 	if repoCfg.Mode == config.ModeReview {
-		oc.Status = state.StatusDraft
-		return nil
-	}
-	// Agent reported blocked/partial — stop before CI watch even in full
-	// mode. The agent told us this isn't ready to merge.
-	if reported == "blocked" || reported == "partial" {
 		oc.Status = state.StatusDraft
 		return nil
 	}
@@ -548,14 +554,14 @@ func (r *Runner) publishOutcome(
 //                              human-or-bot review step
 func (r *Runner) applyBurndownLabels(ctx context.Context, pub RepoPublisher, prNum int, oc *dispatch.Outcome, reported string) {
 	labels := []string{"automation"}
+	// blocked/partial are now intercepted before publishOutcome; only
+	// complete and empty reach here. Keep the switch exhaustive so if new
+	// values are added they default to needs-review rather than silently
+	// getting no status label.
 	switch reported {
-	case "blocked":
-		labels = append(labels, "status:blocked")
-	case "partial":
-		labels = append(labels, "status:needs-review")
 	case "complete":
 		labels = append(labels, "status:ready")
-	default:
+	default: // empty (no report_status call) or any future value
 		labels = append(labels, "status:needs-review")
 	}
 
@@ -653,6 +659,15 @@ func (r *Runner) filterFreshTasks(tasks []sources.Task) []sources.Task {
 			// modes), or an agent run is mid-flight from a prior
 			// nightly that didn't get a chance to publish. Either way
 			// don't redo the work.
+			if existing.LastUpdated.After(pendingCutoff) {
+				continue
+			}
+		case state.StatusBlocked:
+			// Agent explicitly reported it couldn't proceed (missing
+			// dependency, ambiguous spec, etc.). No PR was opened.
+			// Hold for 7 days so the operator has time to resolve the
+			// blocker; after that, auto-retry in case the issue has
+			// been fixed upstream.
 			if existing.LastUpdated.After(pendingCutoff) {
 				continue
 			}
