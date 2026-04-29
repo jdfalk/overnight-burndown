@@ -137,8 +137,24 @@ func TestCommitAndPush_HappyPath(t *testing.T) {
 		rec.calls = append(rec.calls, recorderCall{WorkDir: wd, Env: append([]string(nil), env...), Args: append([]string(nil), args...)})
 		// Rewrite the production-style HTTPS push to a local-bare push so
 		// the test can verify the branch actually lands on disk.
-		if len(args) >= 2 && args[0] == "push" && strings.HasPrefix(args[1], "https://x-access-token:") {
-			rewritten := append([]string{"push", bare}, args[2:]...)
+		// The push command may have leading `-c http....=` config-clear
+		// flags (added to override actions/checkout's inherited extraheader),
+		// so find the "push" subcommand index dynamically.
+		pushIdx := -1
+		for i, a := range args {
+			if a == "push" {
+				pushIdx = i
+				break
+			}
+		}
+		if pushIdx >= 0 && pushIdx+1 < len(args) && strings.HasPrefix(args[pushIdx+1], "https://x-access-token:") {
+			// Keep any `-c` prefix flags so the test exercises the same
+			// command shape as production; just swap the URL for the bare
+			// repo path.
+			rewritten := make([]string, 0, len(args))
+			rewritten = append(rewritten, args[:pushIdx+1]...) // up to and including "push"
+			rewritten = append(rewritten, bare)
+			rewritten = append(rewritten, args[pushIdx+2:]...) // refspec + anything after
 			return realRunGit(ctx, wd, env, rewritten...)
 		}
 		return realRunGit(ctx, wd, env, args...)
@@ -223,7 +239,17 @@ func TestCommitAndPush_TokenRedactedFromPushFailure(t *testing.T) {
 	// Force the push to fail by intercepting only the push; let everything
 	// else succeed via realRunGit.
 	pub.runGit = func(ctx context.Context, wd string, env []string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "push" {
+		// We may pass `-c http....=` flags before the subcommand to clear
+		// inherited extraheader auth, so look for "push" anywhere rather
+		// than only at args[0].
+		isPush := false
+		for _, a := range args {
+			if a == "push" {
+				isPush = true
+				break
+			}
+		}
+		if isPush {
 			// Emit an error string that contains the token, mimicking what
 			// a real `git push` to a bad URL would produce.
 			return "", errors.New("fatal: could not authenticate to https://x-access-token:" + sensitiveTok + "@github.com/jdfalk/x.git/")

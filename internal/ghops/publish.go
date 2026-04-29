@@ -125,7 +125,20 @@ func (p *Publisher) CommitAndPush(ctx context.Context, opts CommitOptions) error
 		url.PathEscape(p.Owner),
 		url.PathEscape(p.Name),
 	)
-	if _, err := p.runGit(ctx, opts.WorktreePath, nil, "push", pushURL, opts.Branch+":"+opts.Branch); err != nil {
+	// actions/checkout sets http.<github>.extraheader in the parent repo's
+	// .git/config (persistent credentials with the workflow's GITHUB_TOKEN).
+	// Worktrees inherit that config, and git applies the extraheader AFTER
+	// URL parse so it OVERRIDES the App token we baked into pushURL — the
+	// push then authenticates as github-actions[bot] (which has zero rights
+	// to other jdfalk repos) and fails with "Permission denied". Clear
+	// every plausible variant before the push: per-host extraheader, the
+	// new lowercase form (git 2.31+), and the global fallback.
+	if _, err := p.runGit(ctx, opts.WorktreePath, nil,
+		"-c", "http.https://github.com/.extraheader=",
+		"-c", "http.https://github.com/.extraHeader=",
+		"-c", "http.extraheader=",
+		"-c", "http.extraHeader=",
+		"push", pushURL, opts.Branch+":"+opts.Branch); err != nil {
 		// Redact the token from any output the git binary leaked into
 		// the error before propagating.
 		return fmt.Errorf("ghops: git push: %w", redactToken(err, tok))
