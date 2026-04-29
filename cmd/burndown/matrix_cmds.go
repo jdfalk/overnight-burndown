@@ -84,6 +84,7 @@ func cmdDispatchOne(args []string) int {
 	taskFile := fs.String("task-file", "", "path to triage result JSON (required)")
 	taskIndex := fs.Int("task-index", -1, "0-based index into TriageResult.Tasks (required)")
 	outPath := fs.String("out", "", "write outcome JSON here (required)")
+	branchSuffix := fs.String("branch-suffix", "", "appended to SuggestedBranch (e.g. 'openai', 'claude') to prevent branch collisions when comparing providers on the same tasks")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -108,6 +109,13 @@ func cmdDispatchOne(args []string) int {
 		return 1
 	}
 	mt := triage.Tasks[*taskIndex]
+
+	// Append provider suffix to the suggested branch so that openai and
+	// anthropic cells working on the same task land on distinct git refs
+	// and don't clobber each other (e.g. draft/rate-1--openai vs --claude).
+	if *branchSuffix != "" {
+		mt.Item.Decision.SuggestedBranch += "--" + *branchSuffix
+	}
 
 	r, err := buildRunnerFromConfig(*configPath, false)
 	if err != nil {
