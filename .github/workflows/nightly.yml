@@ -37,6 +37,15 @@ on:
 permissions:
   contents: read
 
+# Single-flight: a newer trigger queues until the running one finishes.
+# We deliberately do NOT cancel-in-progress — agent runs are long (5-15
+# min per cell × 8 parallel × N waves), and cancelling mid-run would
+# leave half-applied worktrees, dangling PRs, and burn budget without
+# producing a digest.
+concurrency:
+  group: nightly-burndown
+  cancel-in-progress: false
+
 env:
   RUNNER_IMAGE: ghcr.io/jdfalk/burndown-runner-image:bootstrap
 
