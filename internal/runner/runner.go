@@ -351,8 +351,21 @@ func (r *Runner) publishOutcome(
 		return fmt.Errorf("commit/push: %w", err)
 	}
 
-	// Open PR. Draft if classification is not SAFE OR repo is in draft-only mode.
-	isDraft := oc.Decision.Classification != triage.ClassAutoMergeSafe || repoCfg.Mode == config.ModeDraftOnly
+	// Open PR. Draft state depends on mode + triage classification:
+	//   draft-only       → always draft.
+	//   review           → always ready-for-review (the whole point —
+	//                      human sees it in the normal review queue).
+	//   full + SAFE      → ready-for-review (it'll auto-merge if CI green).
+	//   full + non-SAFE  → draft (unsafe; human review required).
+	var isDraft bool
+	switch repoCfg.Mode {
+	case config.ModeDraftOnly:
+		isDraft = true
+	case config.ModeReview:
+		isDraft = false
+	default: // full
+		isDraft = oc.Decision.Classification != triage.ClassAutoMergeSafe
+	}
 	pr, err := pub.OpenPR(ctx, ghops.PROptions{
 		Branch:     oc.Branch,
 		Title:      buildPRTitle(oc),
@@ -369,6 +382,14 @@ func (r *Runner) publishOutcome(
 
 	// draft-only mode stops at PR creation.
 	if repoCfg.Mode == config.ModeDraftOnly {
+		oc.Status = state.StatusDraft
+		return nil
+	}
+	// review mode: ready-for-review PR opened, no CI watch, no auto-merge.
+	// Status is StatusDraft for digest purposes ("opened, awaiting human")
+	// even though the PR isn't literally a draft on GitHub — the digest
+	// vocabulary doesn't currently distinguish.
+	if repoCfg.Mode == config.ModeReview {
 		oc.Status = state.StatusDraft
 		return nil
 	}

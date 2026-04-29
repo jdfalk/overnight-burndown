@@ -25,13 +25,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run mode (overrides config). dry-run is the safe default.'
+        description: 'Run mode (overrides config). dry-run is the safe default. review = ready-for-review PRs, no auto-merge.'
         required: false
         default: 'dry-run'
         type: choice
         options:
           - dry-run
           - draft-only
+          - review
           - full
 
 permissions:

@@ -54,12 +54,21 @@ import (
 )
 
 // Mode is the per-repo operating mode. Modes form a strict ordering of
-// blast radius: DryRun < DraftOnly < Full.
+// blast radius:
+//
+//   DryRun     — triage only; no worktrees, no PRs, no commits.
+//   DraftOnly  — opens draft PRs; no CI watch, no merge.
+//   Review     — opens ready-for-review (non-draft) PRs; no CI watch,
+//                no merge. Use when you want a human to look at the PR
+//                in the normal review queue without the bot auto-merging.
+//   Full       — opens PR (draft if classification not SAFE), watches
+//                CI, auto-merges SAFE classifications when green.
 type Mode string
 
 const (
 	ModeDryRun    Mode = "dry-run"
 	ModeDraftOnly Mode = "draft-only"
+	ModeReview    Mode = "review"
 	ModeFull      Mode = "full"
 )
 
@@ -67,6 +76,7 @@ const (
 var validModes = map[Mode]struct{}{
 	ModeDryRun:    {},
 	ModeDraftOnly: {},
+	ModeReview:    {},
 	ModeFull:      {},
 }
 
