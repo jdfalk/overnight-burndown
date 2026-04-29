@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 1.1.0
+# version: 1.2.0
 
 name: CI
 
@@ -27,6 +27,17 @@ jobs:
           check-latest: true
           cache: false
 
+      - name: Restore Go module + build cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        continue-on-error: true
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
+
       - name: go vet
         run: go vet ./...
 
@@ -41,3 +52,13 @@ jobs:
 
       - name: build
         run: go build -o bin/burndown ./cmd/burndown
+
+      - name: Save Go module + build cache
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        continue-on-error: true
+        if: always()
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
