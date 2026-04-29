@@ -147,6 +147,13 @@ const (
 type LLMFeatureConfig struct {
 	Provider ProviderName `yaml:"provider"`
 	Model    string       `yaml:"model"`
+	// FallbackModels is an ordered list of models to try when the
+	// primary Model exhausts retries (typically: rate-limit 429s or
+	// transient model unavailability). Each fallback gets the same
+	// per-call retry budget. The conversation thread (via
+	// PreviousResponseID) carries across the model swap. Empty = no
+	// fallback, fail after primary's retry budget.
+	FallbackModels []string `yaml:"fallback_models,omitempty"`
 	// API selects the OpenAI endpoint to call. Empty / "responses" uses
 	// /v1/responses (default). "chat-completions" uses the legacy
 	// /v1/chat/completions path; kept while we soak the Responses

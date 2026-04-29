@@ -48,15 +48,18 @@ triage:
 
 implementer:
   provider: openai
-  # The agent now uses /v1/responses by default (see internal/agent/
-  # openai_responses.go) — the codex-mini variant is unblocked. It's
-  # tuned for code generation, has a separate TPM bucket from the
-  # general gpt-5 chat models, and PreviousResponseID means we don't
-  # resend full history every iter. Together that gives us substantial
-  # headroom for the matrix.
+  # Primary: gpt-5.1-codex-mini — Responses-only, code-tuned, separate
+  # TPM bucket from general gpt-5. Fallback chain kicks in when a single
+  # cell exhausts retries on the primary (typically: persistent 429s).
+  # The conversation thread carries across the model swap via
+  # PreviousResponseID; we stick on the fallback for the rest of that
+  # task to avoid flapping back into the same TPM bucket.
   model: gpt-5.1-codex-mini
-  # api: responses  (default — uncomment + set to chat-completions to
-  # fall back to the legacy path during the soak window).
+  fallback_models:
+    - gpt-5.3-codex
+    - gpt-5
+  # api: responses  (default — set to chat-completions to fall back to
+  # the legacy /v1/chat/completions path during soak).
 
 paths:
   state_dir: {tmp}/burndown-state

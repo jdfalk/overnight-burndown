@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/openai/openai-go"
@@ -37,15 +38,29 @@ import (
 	"github.com/jdfalk/overnight-burndown/internal/mcp"
 )
 
+// stderr is overridable in tests; production points at os.Stderr.
+var stderr = os.Stderr
+
 // RunOpenAIResponses is the Responses-API sibling of RunOpenAI. Same
 // signature, same semantics: loop until the model returns no more
 // function_call output items or MaxIterations is hit.
 //
+// `models` is an ordered fallback chain: index 0 is the primary; subsequent
+// entries are tried only when the previous one's retry budget is exhausted
+// (typically: persistent 429s or model unavailability). The conversation
+// thread carries across the model swap via PreviousResponseID — OpenAI
+// allows mid-thread model changes. We "stick" once we fall back; we don't
+// flip back to the primary later in the same task because the conditions
+// that exhausted retries on the primary are likely still in effect.
+//
 // Each iteration after the first uses PreviousResponseID to thread the
-// conversation server-side; we never re-upload prior input + tool
-// outputs. Token usage is accumulated per call into res.Usage so the
-// digest can show the savings vs Chat Completions.
-func RunOpenAIResponses(ctx context.Context, client openai.Client, model string, opts Options) (*Result, error) {
+// conversation server-side; we never re-upload prior input + tool outputs.
+// Token usage is accumulated per call into res.Usage so the digest can show
+// the savings vs Chat Completions.
+func RunOpenAIResponses(ctx context.Context, client openai.Client, models []string, opts Options) (*Result, error) {
+	if len(models) == 0 {
+		return nil, errors.New("agent: RunOpenAIResponses requires at least one model")
+	}
 	if opts.MaxIterations <= 0 {
 		opts.MaxIterations = 30
 	}
@@ -68,12 +83,13 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, model string,
 		OfString: openai.String(buildUserMessage(opts)),
 	}
 	var prevID string
+	modelIdx := 0 // points into `models`; advances on retry-budget exhaustion
 
 	for i := 0; i < opts.MaxIterations; i++ {
 		res.Iterations = i + 1
 
 		params := responses.ResponseNewParams{
-			Model:        shared.ResponsesModel(model),
+			Model:        shared.ResponsesModel(models[modelIdx]),
 			Input:        input,
 			Instructions: openai.String(implementerSystemPrompt),
 			Tools:        tools,
@@ -87,9 +103,10 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, model string,
 			params.PreviousResponseID = openai.String(prevID)
 		}
 
-		resp, err := callResponsesWithRetry(ctx, client, params)
+		resp, err := callResponsesWithModelFallback(ctx, client, params, models, &modelIdx)
 		if err != nil {
-			return nil, fmt.Errorf("agent: openai responses call (iter %d): %w", res.Iterations, err)
+			return nil, fmt.Errorf("agent: openai responses call (iter %d, models tried=%d): %w",
+				res.Iterations, modelIdx+1, err)
 		}
 		prevID = resp.ID
 
@@ -160,6 +177,42 @@ type responsesToolCall struct {
 	Arguments string
 }
 
+// callResponsesWithModelFallback wraps callResponsesWithRetry with a
+// model fallback chain. On retry-budget exhaustion (i.e. the inner
+// helper returns its "rate-limit retries exhausted" error) we advance
+// `*modelIdx` and retry against the next model in the chain. Once we
+// fall back, we stay on the new model — flapping back to the primary
+// would just re-trigger the original 429s.
+//
+// Non-retry-related errors (e.g. invalid request, auth) propagate
+// immediately without falling back; switching models won't help those.
+func callResponsesWithModelFallback(ctx context.Context, client openai.Client, params responses.ResponseNewParams, models []string, modelIdx *int) (*responses.Response, error) {
+	for {
+		resp, err := callResponsesWithRetry(ctx, client, params)
+		if err == nil {
+			return resp, nil
+		}
+		// Only fall back on retry-budget exhaustion. Other errors mean
+		// switching models won't help (auth, schema, 4xx body, etc.).
+		if !errors.Is(err, errRetriesExhausted) {
+			return nil, err
+		}
+		// Try the next model in the chain.
+		if *modelIdx+1 >= len(models) {
+			return nil, fmt.Errorf("all %d models exhausted retries: %w", len(models), err)
+		}
+		old := models[*modelIdx]
+		*modelIdx++
+		next := models[*modelIdx]
+		fmt.Fprintf(stderr, "::warning::agent: model %s exhausted retries, falling back to %s\n", old, next)
+		params.Model = shared.ResponsesModel(next)
+	}
+}
+
+// errRetriesExhausted is returned by callResponsesWithRetry when its retry
+// budget is consumed. The model-fallback wrapper looks for it.
+var errRetriesExhausted = errors.New("rate-limit retries exhausted")
+
 // callResponsesWithRetry mirrors callOpenAIWithRetry from openai.go, but
 // against the Responses endpoint. Same retry budget and backoff curve;
 // duplicated rather than abstracted because the SDK param + return types
@@ -178,7 +231,7 @@ func callResponsesWithRetry(ctx context.Context, client openai.Client, params re
 			return nil, err
 		}
 		if timeNow().After(deadline) {
-			return nil, fmt.Errorf("rate-limit retries exhausted (last err: %w)", err)
+			return nil, fmt.Errorf("%w (last err: %v)", errRetriesExhausted, err)
 		}
 		wait := backoffFor(attempt, baseBackoff, maxBackoff)
 		if hinted := parseRetryAfter(msg); hinted > 0 && hinted <= maxBackoff {
