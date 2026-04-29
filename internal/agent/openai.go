@@ -35,7 +35,7 @@ const (
 	retryBudget = 5 * time.Minute
 	baseBackoff = 2 * time.Second
 	maxBackoff  = 30 * time.Second
-	jitterMs    = 500 * time.Millisecond
+	jitter      = 500 * time.Millisecond
 )
 
 // timeNow / timeAfter are package-level vars so tests can stub time.
@@ -69,7 +69,7 @@ func callOpenAIWithRetry(ctx context.Context, client openai.Client, params opena
 		}
 		wait := backoffFor(attempt, baseBackoff, maxBackoff)
 		if hinted := parseRetryAfter(msg); hinted > 0 && hinted <= maxBackoff {
-			wait = hinted + jitterMs
+			wait = hinted + jitter
 		}
 		select {
 		case <-ctx.Done():

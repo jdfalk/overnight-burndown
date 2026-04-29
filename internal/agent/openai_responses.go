@@ -241,7 +241,7 @@ func callResponsesWithRetry(ctx context.Context, client openai.Client, params re
 		}
 		wait := backoffFor(attempt, baseBackoff, maxBackoff)
 		if hinted := parseRetryAfter(msg); hinted > 0 && hinted <= maxBackoff {
-			wait = hinted + jitterMs
+			wait = hinted + jitter
 		}
 		select {
 		case <-ctx.Done():
