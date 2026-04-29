@@ -32,6 +32,12 @@ import (
 // from misreading a forward-rolled state file.
 const SchemaVersion = 1
 
+// InFlightTTL is the maximum time a task may remain in StatusInFlight before
+// it is considered stale. A task that stays in-flight longer than this had its
+// run crash or time out without updating state; MarkStale resets it to
+// StatusRequeued so the next night can re-dispatch it.
+const InFlightTTL = 12 * time.Hour
+
 // Status is the lifecycle of a single task.
 type Status string
 
@@ -425,6 +431,31 @@ func (s *State) InFlight() []*TaskState {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Hash < out[j].Hash })
 	return out
+}
+
+// MarkStale expires tasks that have been stuck in StatusInFlight for longer
+// than ttl. Each stale task is reset to StatusRequeued so the next run can
+// re-dispatch it. now is injected so callers can use a deterministic clock in
+// tests; production callers pass time.Now().UTC().
+//
+// Only StatusInFlight is affected. StatusDraft means the bot finished and
+// opened a PR — that is not "still being worked on". StatusQueued just means
+// the task hasn't been dispatched yet, which is fine.
+//
+// Returns the number of tasks that were expired.
+func (s *State) MarkStale(ttl time.Duration, now time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := now.Add(-ttl)
+	n := 0
+	for _, t := range s.Tasks {
+		if t.Status == StatusInFlight && t.LastUpdated.Before(cutoff) {
+			t.Status = StatusRequeued
+			t.LastUpdated = now
+			n++
+		}
+	}
+	return n
 }
 
 // AcquireLock takes an exclusive flock on path. The returned release func

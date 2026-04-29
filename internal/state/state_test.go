@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -316,6 +317,96 @@ func TestAcquireLock_ReleaseIsIdempotent(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Concurrent Upsert is goroutine-safe (race detector would flag any issue)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// MarkStale
+// ---------------------------------------------------------------------------
+
+func TestMarkStale_ExpiresOldInFlight(t *testing.T) {
+	s := New()
+	now := time.Now().UTC()
+	src := Source{Type: SourceIssue, Repo: "x/y", URL: "u", ContentHash: "abc"}
+	hash := HashTask(src)
+	old := &TaskState{
+		Hash:        hash,
+		Source:      src,
+		Status:      StatusInFlight,
+		LastUpdated: now.Add(-13 * time.Hour), // 13 h ago — past the 12 h TTL
+	}
+	s.Tasks[hash] = old
+
+	n := s.MarkStale(InFlightTTL, now)
+	if n != 1 {
+		t.Fatalf("expected 1 expiry, got %d", n)
+	}
+	got, _ := s.Get(hash)
+	if got.Status != StatusRequeued {
+		t.Errorf("stale task should become StatusRequeued, got %q", got.Status)
+	}
+	if !got.LastUpdated.Equal(now) {
+		t.Errorf("LastUpdated should be refreshed to now")
+	}
+}
+
+func TestMarkStale_SkipsRecentInFlight(t *testing.T) {
+	s := New()
+	now := time.Now().UTC()
+	src := Source{Type: SourceIssue, Repo: "x/y", URL: "u", ContentHash: "abc"}
+	hash := HashTask(src)
+	s.Tasks[hash] = &TaskState{
+		Hash:        hash,
+		Source:      src,
+		Status:      StatusInFlight,
+		LastUpdated: now.Add(-1 * time.Hour), // 1 h ago — well within TTL
+	}
+
+	if n := s.MarkStale(InFlightTTL, now); n != 0 {
+		t.Fatalf("recent in-flight task should not be expired, got count=%d", n)
+	}
+	got, _ := s.Get(hash)
+	if got.Status != StatusInFlight {
+		t.Errorf("recent task should remain StatusInFlight, got %q", got.Status)
+	}
+}
+
+func TestMarkStale_OnlyAffectsInFlight(t *testing.T) {
+	s := New()
+	now := time.Now().UTC()
+	old := now.Add(-24 * time.Hour) // definitely past any TTL
+	statuses := []Status{StatusQueued, StatusShipped, StatusDraft, StatusBlocked, StatusFailed, StatusNoChange, StatusRequeued}
+	for i, st := range statuses {
+		src := Source{Type: SourceIssue, URL: "u", ContentHash: HashContent(string(rune(i + 1)))}
+		hash := HashTask(src)
+		s.Tasks[hash] = &TaskState{Hash: hash, Source: src, Status: st, LastUpdated: old}
+	}
+
+	if n := s.MarkStale(InFlightTTL, now); n != 0 {
+		t.Errorf("MarkStale should only affect StatusInFlight, but expired %d other tasks", n)
+	}
+	// Verify no statuses were changed.
+	for i, want := range statuses {
+		src := Source{Type: SourceIssue, URL: "u", ContentHash: HashContent(string(rune(i + 1)))}
+		got, _ := s.Get(HashTask(src))
+		if got.Status != want {
+			t.Errorf("status %q should be unchanged, got %q", want, got.Status)
+		}
+	}
+}
+
+func TestMarkStale_MixedBatch(t *testing.T) {
+	s := New()
+	now := time.Now().UTC()
+	// Two stale in-flight, one fresh in-flight.
+	for i, age := range []time.Duration{13 * time.Hour, 25 * time.Hour, 30 * time.Minute} {
+		src := Source{Type: SourceIssue, URL: "u", ContentHash: HashContent(string(rune(i + 1)))}
+		hash := HashTask(src)
+		s.Tasks[hash] = &TaskState{Hash: hash, Source: src, Status: StatusInFlight, LastUpdated: now.Add(-age)}
+	}
+
+	if n := s.MarkStale(InFlightTTL, now); n != 2 {
+		t.Fatalf("expected 2 expirations, got %d", n)
+	}
+}
 
 func TestUpsert_ConcurrentSafe(t *testing.T) {
 	s := New()

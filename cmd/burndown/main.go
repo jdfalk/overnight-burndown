@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -99,11 +100,15 @@ func cmdRun(args []string) int {
 		}
 	}
 
-	// Load (or initialize) state.
+	// Load (or initialize) state; expire any tasks stuck in-flight from a
+	// prior crashed run before dispatching new work.
 	st, err := state.LoadDir(cfg.Paths.StateDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "burndown: load state: %v\n", err)
 		return 1
+	}
+	if n := st.MarkStale(state.InFlightTTL, time.Now().UTC()); n > 0 {
+		fmt.Fprintf(os.Stderr, "burndown: expired %d stale in-flight task(s) (TTL=%v)\n", n, state.InFlightTTL)
 	}
 
 	// Build provider clients on demand. The active providers are
