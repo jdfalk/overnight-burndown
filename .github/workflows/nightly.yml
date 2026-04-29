@@ -40,6 +40,12 @@ permissions:
 env:
   RUNNER_IMAGE: ghcr.io/jdfalk/burndown-runner-image:bootstrap
 
+defaults:
+  run:
+    # Container default is /bin/sh (dash on Ubuntu) which lacks `pipefail`.
+    # Force bash so `set -euo pipefail` works in every step.
+    shell: bash
+
 jobs:
   # ---------------------------------------------------------------------------
   # Phase 1: Triage — one runner, emits tasks.json + a list of indices the
