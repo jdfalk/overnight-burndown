@@ -208,6 +208,39 @@ func buildProviderClients(cfg *config.Config) (*providerClients, error) {
 	return out, nil
 }
 
+// buildProviderClientsForDispatch builds only the implementer-provider client.
+// dispatch-one never calls triage, so the triage provider's credentials are
+// not required — even when the rendered config names OpenAI for triage.
+func buildProviderClientsForDispatch(cfg *config.Config) (*providerClients, error) {
+	out := &providerClients{}
+	switch cfg.Implementer.Provider {
+	case config.ProviderAnthropic:
+		key := os.Getenv(cfg.Anthropic.APIKeyEnv)
+		if key == "" {
+			return nil, fmt.Errorf("%s is not set (required by implementer with provider=anthropic)", cfg.Anthropic.APIKeyEnv)
+		}
+		opts := []option.RequestOption{option.WithAPIKey(key)}
+		if cfg.Anthropic.BaseURL != "" {
+			opts = append(opts, option.WithBaseURL(cfg.Anthropic.BaseURL))
+		}
+		out.anthropic = anthropic.NewClient(opts...)
+	case config.ProviderOpenAI:
+		key := os.Getenv(cfg.OpenAI.APIKeyEnv)
+		if key == "" {
+			return nil, fmt.Errorf("%s is not set (required by implementer with provider=openai)", cfg.OpenAI.APIKeyEnv)
+		}
+		opts := []openaiOption.RequestOption{openaiOption.WithAPIKey(key)}
+		if cfg.OpenAI.BaseURL != "" {
+			opts = append(opts, openaiOption.WithBaseURL(cfg.OpenAI.BaseURL))
+		}
+		out.openai = openai.NewClient(opts...)
+	}
+	if cfg.Implementer.Provider == config.ProviderOpenAI {
+		out.openaiModel = cfg.Implementer.Model
+	}
+	return out, nil
+}
+
 // pickRunAgent returns the dispatch.RunAgentFunc for the active
 // implementer provider. The Anthropic path uses agent.Run; the OpenAI
 // path closes over the OpenAI client + model and ignores the Anthropic
