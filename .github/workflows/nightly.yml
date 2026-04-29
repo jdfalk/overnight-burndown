@@ -126,14 +126,24 @@ jobs:
             --config "$RUNNER_TEMP/config.yaml" \
             --out "$RUNNER_TEMP/tasks.json"
 
+      - name: Stage triage artifact (flatten paths)
+        run: |
+          # upload-artifact v4 preserves the absolute path of any file outside
+          # the workspace, which would land tasks.json at <download-dir>/__w/_temp/
+          # instead of <download-dir>/. Stage everything into a single dir so
+          # the download side gets a flat layout.
+          mkdir -p "$RUNNER_TEMP/triage-stage"
+          cp "$RUNNER_TEMP/tasks.json"   "$RUNNER_TEMP/triage-stage/"
+          cp "$RUNNER_TEMP/config.yaml"  "$RUNNER_TEMP/triage-stage/"
+          if [ -f "$RUNNER_TEMP/burndown-state/state.json" ]; then
+            cp "$RUNNER_TEMP/burndown-state/state.json" "$RUNNER_TEMP/triage-stage/"
+          fi
+
       - name: Upload tasks.json + config + state
         uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a # v4.3.6
         with:
           name: burndown-triage
-          path: |
-            ${{ runner.temp }}/tasks.json
-            ${{ runner.temp }}/config.yaml
-            ${{ runner.temp }}/burndown-state/state.json
+          path: ${{ runner.temp }}/triage-stage/
           retention-days: 7
 
       - name: Emit task indices for matrix fanout
@@ -227,12 +237,19 @@ jobs:
             --task-index ${{ matrix.index }} \
             --out "$RUNNER_TEMP/outcome-${{ matrix.index }}.json"
 
+      - name: Stage outcome (flatten path)
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/outcome-stage"
+          cp "$RUNNER_TEMP/outcome-${{ matrix.index }}.json" \
+             "$RUNNER_TEMP/outcome-stage/" 2>/dev/null || true
+
       - name: Upload outcome
         if: always()
         uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a # v4.3.6
         with:
           name: burndown-outcome-${{ matrix.index }}
-          path: ${{ runner.temp }}/outcome-${{ matrix.index }}.json
+          path: ${{ runner.temp }}/outcome-stage/
           if-no-files-found: warn
           retention-days: 7
 
