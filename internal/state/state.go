@@ -65,9 +65,10 @@ func (s Status) IsTerminal() bool {
 type SourceType string
 
 const (
-	SourceIssue SourceType = "issue"
-	SourceTODO  SourceType = "todo"
-	SourcePlan  SourceType = "plan"
+	SourceIssue   SourceType = "issue"
+	SourceTODO    SourceType = "todo"
+	SourcePlan    SourceType = "plan"
+	SourceUnknown SourceType = "unknown" // reconciled from GitHub; original source unavailable
 )
 
 // Source identifies where a task came from. The hash() of (URL, ContentHash)

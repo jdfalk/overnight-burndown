@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 9e3a4b5c-6d7e-8f9a-0b1c-2d3e4f5a6b7c -->
 
 # overnight-burndown — TODO
@@ -33,17 +33,14 @@ because `-b` rejects an existing branch. Spec:
 - [ ] **BRANCH-1** `AddWorktree`: detect local branch exists → remove orphaned worktree + delete branch → retry fresh
 - [ ] **BRANCH-2** Tests: `TestAddWorktree_CleansOrphanedBranch` + update existing "rejects" test to expect recovery
 
-### State reconciliation from GitHub
+### Label-based merge: `merge-approved` → auto-merge on next nightly
 
-If state artifact upload fails in the matrix workflow, the next nightly
-re-dispatches tasks that already have open PRs, creating duplicates.
-GitHub is the authoritative source of truth; query it on startup to patch
-the hole. Spec:
-[`docs/specs/2026-04-29-state-reconciliation.md`](docs/specs/2026-04-29-state-reconciliation.md).
+Add `merge-approved` label to any burndown PR to signal it's ready to
+land. The next nightly run calls AutoMerge on it automatically, so a human
+reviewer (or a review bot) can approve without waiting for a new dispatch
+cycle. Implemented alongside RECONCILE.
 
-- [ ] **RECONCILE-1** Add `ReconcileFromGitHub`: query open `automation`-labeled PRs → upsert `StatusDraft` rows for any missing from local state
-- [ ] **RECONCILE-2** Call reconcile in `runRepo` before `filterFreshTasks`; best-effort (log + continue on API error)
-- [ ] **RECONCILE-3** Tests: happy path, idempotency, non-burndown PRs ignored, pagination, API error tolerance
+- [ ] **MERGE-1** Document `merge-approved` label in README/wiki so reviewers know to use it
 
 ### GitHub issue creation for blocked tasks
 
@@ -57,6 +54,7 @@ persistent, filterable, undeniable artifact in the issue tracker. Spec:
 
 ## Recently completed
 
+- **State reconciliation + label-merge** (this PR) — `ReconcileFromGitHub` patches state holes from crashed/incomplete prior runs; `mergeApprovedPRs` merges PRs carrying `merge-approved` on every nightly; hash-key bug fixed in runner; 5 reconcile tests added
 - **Model tier selection** (`e6ece17`) — `config.ModelTier` + `LLMFeatureConfig.SelectModel(complexity)` maps triage score (1–5) to a model before the agent loop; replaces runtime fallback chain
 - **Model fallback chain** (`3379dfa`) — codex-mini → gpt-5.3-codex → gpt-5 (superseded by tier selection)
 - **Responses API migration** (`2ea6fdd`) — `RunOpenAIResponses` with `PreviousResponseID` threading; codex-mini as primary
