@@ -283,6 +283,9 @@ func buildRunner(configPath string, dryRun, validate bool) (*runner.Runner, erro
 	if err != nil {
 		return nil, fmt.Errorf("load state: %w", err)
 	}
+	if n := st.MarkStale(state.InFlightTTL, time.Now().UTC()); n > 0 {
+		fmt.Fprintf(os.Stderr, "burndown: expired %d stale in-flight task(s) (TTL=%v)\n", n, state.InFlightTTL)
+	}
 
 	providers, err := buildProviderClients(cfg)
 	if err != nil {
