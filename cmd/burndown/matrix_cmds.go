@@ -206,7 +206,7 @@ func cmdAggregate(args []string) int {
 		outcomes = append(outcomes, *oc)
 	}
 
-	r, err := buildRunnerNoValidate(*configPath, false)
+	r, err := buildRunnerForAggregate(*configPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "burndown aggregate:", err)
 		return 1
@@ -262,6 +262,18 @@ func buildRunnerFromConfig(configPath string, dryRun bool) (*runner.Runner, erro
 
 func buildRunnerNoValidate(configPath string, dryRun bool) (*runner.Runner, error) {
 	return buildRunner(configPath, dryRun, false)
+}
+
+// buildRunnerForAggregate builds a minimal Runner that only needs
+// Config.Paths.DigestDir — no LLM credentials required. The aggregate
+// subcommand renders a digest from already-completed outcome JSON files;
+// it never calls triage, dispatch, or any provider API.
+func buildRunnerForAggregate(configPath string) (*runner.Runner, error) {
+	cfg, err := config.LoadNoValidate(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	return &runner.Runner{Config: *cfg}, nil
 }
 
 func buildRunner(configPath string, dryRun, validate bool) (*runner.Runner, error) {
