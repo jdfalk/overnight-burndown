@@ -88,6 +88,80 @@ func TestSaveLoad_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestSaveDirLoadDir_Roundtrip(t *testing.T) {
+	td := t.TempDir()
+	s := New()
+	src1 := Source{Type: SourceTODO, Repo: "x/y", URL: "TODO.md#L1", ContentHash: "aaa"}
+	src2 := Source{Type: SourceIssue, Repo: "x/y", URL: "https://example/2", ContentHash: "bbb"}
+	s.Upsert(&TaskState{Hash: HashTask(src1), Source: src1, Status: StatusDraft})
+	s.Upsert(&TaskState{Hash: HashTask(src2), Source: src2, Status: StatusInFlight})
+
+	if err := s.SaveDir(td); err != nil {
+		t.Fatalf("SaveDir: %v", err)
+	}
+
+	loaded, err := LoadDir(td)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	if got := len(loaded.Tasks); got != 2 {
+		t.Fatalf("want 2 tasks, got %d", got)
+	}
+	if got, ok := loaded.Get(HashTask(src1)); !ok || got.Status != StatusDraft {
+		t.Errorf("task1 status mismatch: ok=%v got=%+v", ok, got)
+	}
+	if got, ok := loaded.Get(HashTask(src2)); !ok || got.Status != StatusInFlight {
+		t.Errorf("task2 status mismatch: ok=%v got=%+v", ok, got)
+	}
+}
+
+func TestLoadDir_MigratesLegacyMonolithicFile(t *testing.T) {
+	td := t.TempDir()
+	// Plant a legacy state.json + load it via LoadDir; then SaveDir should
+	// rename state.json → state.json.migrated.
+	legacy := New()
+	src := Source{Type: SourceTODO, Repo: "x/y", URL: "TODO.md#L1", ContentHash: "aaa"}
+	legacy.Upsert(&TaskState{Hash: HashTask(src), Source: src, Status: StatusShipped})
+	if err := legacy.Save(filepath.Join(td, "state.json")); err != nil {
+		t.Fatalf("seed legacy: %v", err)
+	}
+
+	loaded, err := LoadDir(td)
+	if err != nil {
+		t.Fatalf("LoadDir with legacy: %v", err)
+	}
+	if got, ok := loaded.Get(HashTask(src)); !ok || got.Status != StatusShipped {
+		t.Errorf("legacy task missing or wrong status: ok=%v got=%+v", ok, got)
+	}
+	if err := loaded.SaveDir(td); err != nil {
+		t.Fatalf("SaveDir after migration: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(td, "state.json")); err == nil {
+		t.Error("legacy state.json still present after migration; should be renamed")
+	}
+	if _, err := os.Stat(filepath.Join(td, "state.json.migrated")); err != nil {
+		t.Errorf("state.json.migrated missing after SaveDir: %v", err)
+	}
+}
+
+func TestSaveTask_WritesSingleFile(t *testing.T) {
+	td := t.TempDir()
+	s := New()
+	src := Source{Type: SourceTODO, Repo: "x/y", URL: "TODO.md#L1", ContentHash: "aaa"}
+	t1 := &TaskState{Hash: HashTask(src), Source: src, Status: StatusQueued}
+	s.Upsert(t1)
+	if err := s.SaveTask(td, t1.Hash); err != nil {
+		t.Fatalf("SaveTask: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(td, "tasks", t1.Hash+".json")); err != nil {
+		t.Errorf("per-task file not written: %v", err)
+	}
+	// Unknown hash → error.
+	if err := s.SaveTask(td, "nope"); err == nil {
+		t.Error("SaveTask with unknown hash should error")
+	}
+}
+
 func TestLoad_MissingFileReturnsEmpty(t *testing.T) {
 	td := t.TempDir()
 	s, err := Load(filepath.Join(td, "nonexistent.json"))

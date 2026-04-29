@@ -172,6 +172,15 @@ jobs:
           mkdir -p "$RUNNER_TEMP/triage-stage"
           cp "$RUNNER_TEMP/tasks.json"   "$RUNNER_TEMP/triage-stage/"
           cp "$RUNNER_TEMP/config.yaml"  "$RUNNER_TEMP/triage-stage/"
+          # State is a directory now (per-task .json files under tasks/, plus
+          # a meta.json). Copy the whole thing so dispatch + aggregate can
+          # reconstruct the catalog. cp -r is fine since the structure is
+          # already flat under burndown-state/.
+          if [ -d "$RUNNER_TEMP/burndown-state" ]; then
+            cp -r "$RUNNER_TEMP/burndown-state" "$RUNNER_TEMP/triage-stage/"
+          fi
+          # Legacy compat — tolerate older runs that may have left a single
+          # state.json in burndown-state/.
           if [ -f "$RUNNER_TEMP/burndown-state/state.json" ]; then
             cp "$RUNNER_TEMP/burndown-state/state.json" "$RUNNER_TEMP/triage-stage/"
           fi
@@ -293,7 +302,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/burndown-state"
           cp "$RUNNER_TEMP/triage/config.yaml" "$RUNNER_TEMP/config.yaml"
           cp "$RUNNER_TEMP/triage/tasks.json" "$RUNNER_TEMP/tasks.json"
-          cp "$RUNNER_TEMP/triage/state.json" "$RUNNER_TEMP/burndown-state/state.json" || true
+          # Per-task state files (preferred shape) — copy the whole dir.
+          if [ -d "$RUNNER_TEMP/triage/burndown-state" ]; then
+            cp -r "$RUNNER_TEMP/triage/burndown-state/." "$RUNNER_TEMP/burndown-state/"
+          fi
+          # Legacy compat.
+          cp "$RUNNER_TEMP/triage/state.json" "$RUNNER_TEMP/burndown-state/state.json" 2>/dev/null || true
 
       - name: Materialize GitHub App key (per-cell)
         env:

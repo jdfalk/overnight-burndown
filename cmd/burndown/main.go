@@ -100,8 +100,7 @@ func cmdRun(args []string) int {
 	}
 
 	// Load (or initialize) state.
-	statePath := filepath.Join(cfg.Paths.StateDir, "state.json")
-	st, err := state.Load(statePath)
+	st, err := state.LoadDir(cfg.Paths.StateDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "burndown: load state: %v\n", err)
 		return 1

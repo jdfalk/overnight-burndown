@@ -127,8 +127,7 @@ func (r *Runner) Triage(ctx context.Context) (*TriageResult, error) {
 		}
 	}
 
-	statePath := filepath.Join(r.Config.Paths.StateDir, "state.json")
-	if err := r.State.Save(statePath); err != nil {
+	if err := r.State.SaveDir(r.Config.Paths.StateDir); err != nil {
 		fmt.Fprintf(os.Stderr, "triage: save state: %v\n", err)
 	}
 	return out, nil

@@ -189,9 +189,16 @@ func TestRun_DryRun_EndToEnd(t *testing.T) {
 		}
 	}
 
-	// State file written.
-	if _, err := os.Stat(filepath.Join(tmp, "state", "state.json")); err != nil {
-		t.Errorf("state.json not written: %v", err)
+	// State written as per-task files under state/tasks/ + a meta.json.
+	if _, err := os.Stat(filepath.Join(tmp, "state", "meta.json")); err != nil {
+		t.Errorf("state meta.json not written: %v", err)
+	}
+	tasksDir := filepath.Join(tmp, "state", "tasks")
+	ents, err := os.ReadDir(tasksDir)
+	if err != nil {
+		t.Errorf("state tasks dir missing: %v", err)
+	} else if len(ents) == 0 {
+		t.Errorf("state tasks dir is empty")
 	}
 }
 

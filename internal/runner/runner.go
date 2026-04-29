@@ -196,8 +196,7 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 		fmt.Fprintf(os.Stderr, "runner: write digest: %v\n", err)
 	}
 
-	statePath := filepath.Join(r.Config.Paths.StateDir, "state.json")
-	if err := r.State.Save(statePath); err != nil {
+	if err := r.State.SaveDir(r.Config.Paths.StateDir); err != nil {
 		fmt.Fprintf(os.Stderr, "runner: save state: %v\n", err)
 	}
 

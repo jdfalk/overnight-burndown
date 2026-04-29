@@ -278,8 +278,7 @@ func buildRunner(configPath string, dryRun, validate bool) (*runner.Runner, erro
 		}
 	}
 
-	statePath := filepath.Join(cfg.Paths.StateDir, "state.json")
-	st, err := state.Load(statePath)
+	st, err := state.LoadDir(cfg.Paths.StateDir)
 	if err != nil {
 		return nil, fmt.Errorf("load state: %w", err)
 	}

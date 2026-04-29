@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -182,6 +183,178 @@ func (s *State) Save(path string) error {
 	}
 	cleanup = false
 	return nil
+}
+
+// LoadDir reads per-task state files from <dir>/tasks/*.json into a single
+// State. Missing dir or missing tasks/ subdir yield an empty State + nil err
+// (first-night runs, or a freshly-cleaned state directory).
+//
+// Per-task layout — one JSON file per task hash — is the durability layer
+// for the matrix workflow: each dispatch cell can SaveTask its own row
+// independently without contention, artifact upload preserves the per-file
+// shape, and corrupting / losing one file doesn't poison the catalog.
+//
+// As a migration affordance: if <dir>/state.json exists (the legacy
+// monolithic shape), it's read first and merged in. The next SaveDir call
+// will write per-task files; the legacy state.json is then renamed to
+// state.json.migrated so a re-load doesn't double-count.
+func LoadDir(dir string) (*State, error) {
+	s := New()
+
+	// Legacy monolithic file. Read if present; the per-task files (read
+	// next) win on overlap because they're the post-migration shape.
+	legacyPath := filepath.Join(dir, "state.json")
+	if _, err := os.Stat(legacyPath); err == nil {
+		legacy, err := Load(legacyPath)
+		if err != nil {
+			return nil, fmt.Errorf("state: load legacy %q: %w", legacyPath, err)
+		}
+		for k, v := range legacy.Tasks {
+			s.Tasks[k] = v
+		}
+		s.LastRun = legacy.LastRun
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("state: stat %q: %w", legacyPath, err)
+	}
+
+	tasksDir := filepath.Join(dir, "tasks")
+	entries, err := os.ReadDir(tasksDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return s, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("state: read tasks dir %q: %w", tasksDir, err)
+	}
+	for _, ent := range entries {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".json") {
+			continue
+		}
+		p := filepath.Join(tasksDir, ent.Name())
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil, fmt.Errorf("state: read %q: %w", p, err)
+		}
+		var t TaskState
+		if err := json.Unmarshal(data, &t); err != nil {
+			return nil, fmt.Errorf("state: decode %q: %w", p, err)
+		}
+		if t.Hash == "" {
+			// Filename-as-hash fallback: <hash>.json
+			t.Hash = strings.TrimSuffix(ent.Name(), ".json")
+		}
+		s.Tasks[t.Hash] = &t
+	}
+	return s, nil
+}
+
+// SaveDir writes one JSON file per task to <dir>/tasks/<hash>.json, plus a
+// small <dir>/meta.json with the schema version and last-run timestamp.
+// Per-task writes are atomic (tempfile + rename), independent of each
+// other, and idempotent.
+//
+// On successful write, a legacy <dir>/state.json (if any) is renamed to
+// state.json.migrated to prevent a re-load from double-counting after the
+// migration.
+func (s *State) SaveDir(dir string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.SchemaVersion == 0 {
+		s.SchemaVersion = SchemaVersion
+	}
+	tasksDir := filepath.Join(dir, "tasks")
+	if err := os.MkdirAll(tasksDir, 0o755); err != nil {
+		return fmt.Errorf("state: mkdir %q: %w", tasksDir, err)
+	}
+
+	for hash, t := range s.Tasks {
+		if hash == "" {
+			continue
+		}
+		if t.Hash == "" {
+			t.Hash = hash
+		}
+		if err := writeTaskFile(tasksDir, t); err != nil {
+			return err
+		}
+	}
+
+	meta := struct {
+		SchemaVersion int       `json:"schema_version"`
+		LastRun       time.Time `json:"last_run"`
+	}{SchemaVersion: s.SchemaVersion, LastRun: s.LastRun}
+	if err := writeJSONAtomic(filepath.Join(dir, "meta.json"), meta); err != nil {
+		return err
+	}
+
+	// Sweep the legacy monolithic file out of the way once we've written
+	// the new shape successfully. Idempotent on subsequent runs (rename
+	// of a non-existent file is a no-op below).
+	legacy := filepath.Join(dir, "state.json")
+	if _, err := os.Stat(legacy); err == nil {
+		_ = os.Rename(legacy, legacy+".migrated")
+	}
+	return nil
+}
+
+func writeTaskFile(tasksDir string, t *TaskState) error {
+	if t.Hash == "" {
+		return errors.New("state: writeTaskFile: empty hash")
+	}
+	return writeJSONAtomic(filepath.Join(tasksDir, t.Hash+".json"), t)
+}
+
+func writeJSONAtomic(path string, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("state: marshal %q: %w", path, err)
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".task-*.json")
+	if err != nil {
+		return fmt.Errorf("state: temp file %q: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("state: write tmp %q: %w", tmpName, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("state: fsync tmp %q: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("state: close tmp %q: %w", tmpName, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("state: rename %q→%q: %w", tmpName, path, err)
+	}
+	cleanup = false
+	return nil
+}
+
+// SaveTask writes a single task's file. Used by matrix dispatch cells to
+// publish their own outcome row without lock contention against siblings.
+// Caller is responsible for the surrounding mutex if the in-memory map is
+// also being mutated; the file write itself is atomic.
+func (s *State) SaveTask(dir, hash string) error {
+	s.mu.Lock()
+	t, ok := s.Tasks[hash]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("state: SaveTask: unknown hash %s", hash)
+	}
+	tasksDir := filepath.Join(dir, "tasks")
+	if err := os.MkdirAll(tasksDir, 0o755); err != nil {
+		return fmt.Errorf("state: mkdir %q: %w", tasksDir, err)
+	}
+	return writeTaskFile(tasksDir, t)
 }
 
 // HashTask returns a stable hash usable as a TaskState key. Two collections
