@@ -1,0 +1,41 @@
+# file: .github/repository-config.yml
+# version: 1.0.0
+# guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
+
+repository:
+  name: overnight-burndown
+  type: go-binary
+  primary_language: go
+  visibility: public
+  description: 'Nightly burndown bot — triages TODO items, dispatches an implementer agent per task on its own runner, opens PRs.'
+
+languages:
+  versions:
+    go:
+      - '1.25'
+
+build:
+  platforms:
+    - ubuntu-latest
+
+ci:
+  coverage:
+    threshold: 0
+    fail_on_drop: false
+  lint:
+    enabled: true
+
+release:
+  versioning:
+    default_branch_strategy:
+      main: patch
+  artifacts:
+    buckets:
+      binaries: dist/
+
+packages:
+  registries:
+    github: true
+    pypi: false
+    npm: false
+    cargo: false
