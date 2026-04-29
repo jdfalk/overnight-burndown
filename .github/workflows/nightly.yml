@@ -38,7 +38,7 @@ permissions:
   contents: read
 
 env:
-  RUNNER_IMAGE: ghcr.io/jdfalk/burndown-runner-image:latest
+  RUNNER_IMAGE: ghcr.io/jdfalk/burndown-runner-image:bootstrap
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     container:
-      image: ghcr.io/jdfalk/burndown-runner-image:latest
+      image: ghcr.io/jdfalk/burndown-runner-image:bootstrap
     outputs:
       task_indices: ${{ steps.emit.outputs.task_indices }}
       task_count: ${{ steps.emit.outputs.task_count }}
@@ -167,7 +167,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     container:
-      image: ghcr.io/jdfalk/burndown-runner-image:latest
+      image: ghcr.io/jdfalk/burndown-runner-image:bootstrap
     strategy:
       fail-fast: false
       matrix:
@@ -247,7 +247,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
-      image: ghcr.io/jdfalk/burndown-runner-image:latest
+      image: ghcr.io/jdfalk/burndown-runner-image:bootstrap
     steps:
       - name: Checkout overnight-burndown
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
