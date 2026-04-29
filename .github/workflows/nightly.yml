@@ -231,12 +231,12 @@ jobs:
       needs.triage.outputs.task_count != '0' &&
       inputs.implementer_provider != 'anthropic'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     container:
       image: ghcr.io/jdfalk/burndown-runner-image:bootstrap
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 4
       matrix:
         index: ${{ fromJson(needs.triage.outputs.task_indices) }}
     steps:
@@ -355,14 +355,14 @@ jobs:
     needs: triage
     if: >-
       needs.triage.outputs.task_count != '0' &&
-      (inputs.implementer_provider == 'anthropic' || inputs.implementer_provider == 'compare')
+      inputs.implementer_provider == 'anthropic'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     container:
       image: ghcr.io/jdfalk/burndown-runner-image:bootstrap
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 4
       matrix:
         index: ${{ fromJson(needs.triage.outputs.task_indices) }}
     steps:

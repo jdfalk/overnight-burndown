@@ -32,9 +32,9 @@ var retryAfterRe = regexp.MustCompile(`try again in ([0-9]+(?:\.[0-9]+)?)s`)
 // and callResponsesWithRetry (Responses). Both endpoints emit the same 429
 // shape with an "Please try again in X.Ys" hint.
 const (
-	retryBudget = 5 * time.Minute
-	baseBackoff = 2 * time.Second
-	maxBackoff  = 30 * time.Second
+	retryBudget = 15 * time.Minute
+	baseBackoff = 5 * time.Second
+	maxBackoff  = 90 * time.Second
 	jitter      = 500 * time.Millisecond
 )
 
