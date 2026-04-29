@@ -133,7 +133,23 @@ func cmdDispatchOne(args []string) int {
 	}
 	fmt.Printf("burndown dispatch-one: %s → %s (%s)\n",
 		mt.Item.Task.Source.Title, oc.Status, oc.Branch)
-	return 0
+
+	// Reflect the outcome in the exit code so a matrix cell with a failed
+	// agent shows red in the GH Actions UI rather than green-with-failure-
+	// in-JSON. Aggregate uses if: always(), so a red cell here doesn't
+	// prevent the digest from rendering. Exit 0 only when the outcome is
+	// StatusInFlight / StatusShipped / StatusDraft / StatusBlocked.
+	switch oc.Status {
+	case state.StatusInFlight, state.StatusShipped, state.StatusDraft, state.StatusBlocked:
+		return 0
+	default:
+		// Make the failure reason loud in the GHA log so you don't have to
+		// download the artifact to see why a cell went red.
+		fmt.Fprintf(os.Stderr,
+			"::error::dispatch-one failed (status=%s, branch=%s): %s\n",
+			oc.Status, oc.Branch, oc.Error)
+		return 1
+	}
 }
 
 // cmdAggregate concatenates dispatch-one Outcome JSON files plus the
