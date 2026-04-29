@@ -55,11 +55,15 @@ type TaskWithDecision struct {
 type Outcome struct {
 	Task         sources.Task
 	Decision     triage.Decision
-	Status       state.Status   // in-flight on success, failed on error
-	Branch       string         // empty if the task never made it to worktree creation
-	WorktreePath string         // present even on failure for postmortem inspection
-	AgentResult  *agent.Result  // present on success
-	Error        string         // populated when Status == failed
+	Status       state.Status  // in-flight on success, failed on error
+	Branch       string        // empty if the task never made it to worktree creation
+	WorktreePath string        // present even on failure for postmortem inspection
+	AgentResult  *agent.Result // present on success
+	// Model is the model ID that actually ran the agent (e.g.
+	// "codex-mini", "gpt-5.3-codex"). Copied from AgentResult.Model so
+	// callers don't need to nil-check AgentResult to apply the label.
+	Model string
+	Error string // populated when Status == failed
 }
 
 // SpawnMCPFunc returns an MCPClient configured to act on the given
@@ -199,6 +203,7 @@ func (d *Dispatcher) runOne(ctx context.Context, item TaskWithDecision, branch s
 	}
 
 	out.AgentResult = res
+	out.Model = res.Model
 	out.Status = state.StatusInFlight // agent finished; PR creation pending in step 9
 	return out
 }

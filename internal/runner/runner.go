@@ -333,6 +333,27 @@ func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t triag
 			outcomes[i].Status = state.StatusFailed
 			outcomes[i].Error = err.Error()
 		}
+		// outcome:<status> records the final result paired to the model so we
+		// can later filter "model:codex-mini + outcome:failed" vs "outcome:shipped"
+		// to tune complexity → model-tier thresholds.
+		if prInfo := out.PRs[outcomes[i].Branch]; prInfo.Number != 0 {
+			var outcomeLabel string
+			switch outcomes[i].Status {
+			case state.StatusShipped:
+				outcomeLabel = "outcome:shipped"
+			case state.StatusFailed:
+				outcomeLabel = "outcome:failed"
+			case state.StatusNoChange:
+				outcomeLabel = "outcome:no-change"
+			case state.StatusDraft:
+				outcomeLabel = "outcome:draft"
+			}
+			if outcomeLabel != "" {
+				if err := pub.AddLabel(ctx, prInfo.Number, outcomeLabel); err != nil {
+					fmt.Fprintf(os.Stderr, "burndown: AddLabel %q on PR #%d: %v\n", outcomeLabel, prInfo.Number, err)
+				}
+			}
+		}
 		// Persist final status + PR info so future runs don't re-dispatch.
 		prInfo := out.PRs[outcomes[i].Branch]
 		r.State.Upsert(&state.TaskState{
@@ -538,6 +559,14 @@ func (r *Runner) applyBurndownLabels(ctx context.Context, pub RepoPublisher, prN
 		labels = append(labels, "status:needs-review")
 	}
 
+	// model:<slug> records which model handled this task. Used as a training
+	// signal to tune the complexity→model-tier mapping: if codex-mini PRs
+	// consistently need human fixup while gpt-5 PRs merge cleanly, the tier
+	// thresholds need adjusting.
+	if oc.Model != "" {
+		labels = append(labels, "model:"+modelSlug(oc.Model))
+	}
+
 	// Size bucket from changed-line count. ListChangedFiles also serves
 	// the gate evaluator, so we may already have it; pay the API call
 	// once here and accept the duplication for now.
@@ -558,6 +587,24 @@ func (r *Runner) applyBurndownLabels(ctx context.Context, pub RepoPublisher, prN
 			fmt.Fprintf(os.Stderr, "burndown: AddLabel %q on PR #%d: %v\n", l, prNum, err)
 		}
 	}
+}
+
+// modelSlug turns a model name into a GitHub-label-safe slug. Dots and
+// underscores become hyphens; spaces are stripped. E.g. "gpt-5.3-codex"
+// → "gpt-5-3-codex", "claude-haiku-4-5-20251001" is already clean.
+func modelSlug(model string) string {
+	var b strings.Builder
+	for _, c := range strings.ToLower(model) {
+		switch {
+		case c == '.' || c == '_':
+			b.WriteRune('-')
+		case c == ' ':
+			// skip spaces
+		default:
+			b.WriteRune(c)
+		}
+	}
+	return b.String()
 }
 
 // sizeBucket returns the size/* bucket for a given changed-line count.
