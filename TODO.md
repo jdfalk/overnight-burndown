@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 9e3a4b5c-6d7e-8f9a-0b1c-2d3e4f5a6b7c -->
 
 # overnight-burndown — TODO
@@ -15,10 +15,10 @@ ship on `/v1/responses` only or first. Plus `PreviousResponseID`
 collapses prompt-token cost for our 5–15 iteration agent loop. Spec:
 [`docs/specs/2026-04-29-responses-api-migration.md`](docs/specs/2026-04-29-responses-api-migration.md).
 
-- [ ] **RESP-1** Add `RunOpenAIResponses` alongside `RunOpenAI`; gate via config
+- [x] **RESP-1** Add `RunOpenAIResponses` alongside `RunOpenAI`; gate via config (`2ea6fdd`)
 - [ ] **RESP-2** Migrate `internal/triage/openai.go` to Responses (single forced tool call — lowest risk first)
-- [ ] **RESP-3** Default `implementer.api=responses` in `render-ci-config.py`
-- [ ] **RESP-4** Tests: mocked Responses round-trip incl. multi-iter `PreviousResponseID` threading
+- [x] **RESP-3** Default `implementer.api=responses` — Responses is now the default path in `main.go`; Chat Completions is opt-in via `api: chat-completions` (`2ea6fdd`)
+- [x] **RESP-4** Complexity-based model tier selection replaces runtime fallback chain; retry tests + tier tests added (`e6ece17`) — full mocked PreviousResponseID round-trip still pending
 - [ ] **RESP-5** Soak two clean nightlies, then delete the Chat Completions path
 
 ## Backlog
@@ -57,4 +57,16 @@ persistent, filterable, undeniable artifact in the issue tracker. Spec:
 
 ## Recently completed
 
-_(see CHANGELOG.md)_
+- **Model tier selection** (`e6ece17`) — `config.ModelTier` + `LLMFeatureConfig.SelectModel(complexity)` maps triage score (1–5) to a model before the agent loop; replaces runtime fallback chain
+- **Model fallback chain** (`3379dfa`) — codex-mini → gpt-5.3-codex → gpt-5 (superseded by tier selection)
+- **Responses API migration** (`2ea6fdd`) — `RunOpenAIResponses` with `PreviousResponseID` threading; codex-mini as primary
+- **CI cache resilience** (`2d90b26`) — replaced `setup-go cache:true` (hard-fails on HTTP 400) with explicit `actions/cache/restore` + `actions/cache/save` with `continue-on-error`
+- **ST1011 fix** (`24a0ed3`) — renamed `jitterMs→jitter` in `openai.go` + `openai_responses.go`
+- **Generic packages 404 fix** (`b2a56e0`) — `packages.registries.github: false` in `.github/repository-config.yml`
+- **Auth fix for git push** (`5e1023d`) — clear inherited `extraheader` before push in `ghops`
+- **Per-task state files** (`5cb7840`) — `state/tasks/<hash>.json`; 7-day dedup prevents re-dispatching tasks with open PRs
+- **Status self-report** (`5d071d5`) — agent calls `report_status`; harness sets PR labels and draft/ready accordingly
+- **review mode** (`b4a9176`) — ready-for-review PRs, no CI watch or auto-merge
+- **Durability specs** (`ee6d8ee`) — BRANCH/RECONCILE/ISSUE specs + TODO entries (backlog)
+
+_(older entries: see CHANGELOG.md)_
