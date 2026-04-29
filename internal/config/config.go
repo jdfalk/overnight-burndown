@@ -151,24 +151,54 @@ const (
 	ProviderOpenAI    ProviderName = "openai"
 )
 
+// ModelTier pairs a model name with a complexity ceiling. When a task's
+// EstComplexity (1–5 from triage) is ≤ MaxComplexity, that tier's model is
+// selected. MaxComplexity == 0 means "no ceiling" — use this as the catch-all
+// last tier. Tiers are evaluated in order; the first match wins.
+//
+// Example config:
+//
+//	model_tiers:
+//	  - model: gpt-5.1-codex-mini
+//	    max_complexity: 2
+//	  - model: gpt-5.3-codex
+//	    max_complexity: 4
+//	  - model: gpt-5
+//	    # no max_complexity → catch-all for complexity 5+
+type ModelTier struct {
+	Model         string `yaml:"model"`
+	MaxComplexity int    `yaml:"max_complexity,omitempty"`
+}
+
 // LLMFeatureConfig picks an LLM provider + model for one feature
 // (triage or implementer agent). Both fields are required when this
 // block is present.
 type LLMFeatureConfig struct {
 	Provider ProviderName `yaml:"provider"`
 	Model    string       `yaml:"model"`
-	// FallbackModels is an ordered list of models to try when the
-	// primary Model exhausts retries (typically: rate-limit 429s or
-	// transient model unavailability). Each fallback gets the same
-	// per-call retry budget. The conversation thread (via
-	// PreviousResponseID) carries across the model swap. Empty = no
-	// fallback, fail after primary's retry budget.
-	FallbackModels []string `yaml:"fallback_models,omitempty"`
+	// ModelTiers selects a model based on task complexity (1–5 from triage).
+	// The first tier whose MaxComplexity >= complexity (or MaxComplexity == 0)
+	// wins. When empty, Model is used for all tasks. Only applies to the
+	// OpenAI Responses path.
+	ModelTiers []ModelTier `yaml:"model_tiers,omitempty"`
 	// API selects the OpenAI endpoint to call. Empty / "responses" uses
 	// /v1/responses (default). "chat-completions" uses the legacy
 	// /v1/chat/completions path; kept while we soak the Responses
 	// migration. Ignored when Provider != openai.
 	API OpenAIAPIName `yaml:"api,omitempty"`
+}
+
+// SelectModel returns the best model for the given task complexity (1–5).
+// It walks ModelTiers in declaration order; the first tier whose MaxComplexity
+// is 0 (catch-all) or >= complexity is returned. Falls back to Model when
+// ModelTiers is empty or no tier matches.
+func (f LLMFeatureConfig) SelectModel(complexity int) string {
+	for _, t := range f.ModelTiers {
+		if t.MaxComplexity == 0 || complexity <= t.MaxComplexity {
+			return t.Model
+		}
+	}
+	return f.Model
 }
 
 // OpenAIAPIName chooses which OpenAI endpoint we hit for a feature.
@@ -389,6 +419,22 @@ func (c *Config) Validate() error {
 		}
 		if fc.f.Model == "" {
 			errs = append(errs, fmt.Errorf("%s.model: required when provider is set", fc.name))
+		}
+		// ModelTiers validation: each tier needs a model; catch-all (0) must
+		// be last; no more than one catch-all.
+		catchAllSeen := false
+		for j, tier := range fc.f.ModelTiers {
+			if catchAllSeen {
+				errs = append(errs, fmt.Errorf("%s.model_tiers[%d]: tier after catch-all (max_complexity=0) is unreachable", fc.name, j))
+			}
+			if tier.Model == "" {
+				errs = append(errs, fmt.Errorf("%s.model_tiers[%d].model: required", fc.name, j))
+			}
+			if tier.MaxComplexity == 0 {
+				catchAllSeen = true
+			} else if tier.MaxComplexity < 1 || tier.MaxComplexity > 5 {
+				errs = append(errs, fmt.Errorf("%s.model_tiers[%d].max_complexity: must be 1–5 or 0 (catch-all), got %d", fc.name, j, tier.MaxComplexity))
+			}
 		}
 	}
 

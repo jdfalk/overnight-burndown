@@ -223,12 +223,12 @@ func pickRunAgent(cfg *config.Config, providers *providerClients) (dispatch.RunA
 				return agent.RunOpenAI(ctx, client, model, opts)
 			}, nil
 		}
-		// Build the model fallback chain: primary first, then anything
-		// listed in implementer.fallback_models. Empty fallback list = no
-		// fallback (primary's retry budget is the final word).
-		modelChain := append([]string{model}, cfg.Implementer.FallbackModels...)
 		return func(ctx context.Context, opts agent.Options) (*agent.Result, error) {
-			return agent.RunOpenAIResponses(ctx, client, modelChain, opts)
+			// Select the model tier that matches this task's complexity score
+			// (1–5 from triage). Falls back to implementer.model when no
+			// model_tiers are configured.
+			selected := cfg.Implementer.SelectModel(opts.Decision.EstComplexity)
+			return agent.RunOpenAIResponses(ctx, client, selected, opts)
 		}, nil
 	case config.ProviderAnthropic:
 		// agent.Run reads opts.Client and opts.Model that the dispatcher

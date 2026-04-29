@@ -292,6 +292,66 @@ func TestValidate_RejectsDuplicateRepos(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// SelectModel
+// ---------------------------------------------------------------------------
+
+func TestSelectModel_NoTiers(t *testing.T) {
+	f := LLMFeatureConfig{Model: "gpt-default"}
+	for _, c := range []int{1, 3, 5} {
+		if got := f.SelectModel(c); got != "gpt-default" {
+			t.Errorf("complexity %d: got %q, want gpt-default", c, got)
+		}
+	}
+}
+
+func TestSelectModel_TieredByComplexity(t *testing.T) {
+	f := LLMFeatureConfig{
+		Model: "gpt-fallback", // never reached when tiers cover everything
+		ModelTiers: []ModelTier{
+			{Model: "mini", MaxComplexity: 2},
+			{Model: "medium", MaxComplexity: 4},
+			{Model: "large", MaxComplexity: 0}, // catch-all
+		},
+	}
+	cases := []struct{ complexity int; want string }{
+		{1, "mini"},
+		{2, "mini"},
+		{3, "medium"},
+		{4, "medium"},
+		{5, "large"},
+	}
+	for _, tc := range cases {
+		if got := f.SelectModel(tc.complexity); got != tc.want {
+			t.Errorf("complexity %d: got %q, want %q", tc.complexity, got, tc.want)
+		}
+	}
+}
+
+func TestSelectModel_CatchAllFirst(t *testing.T) {
+	// A single catch-all tier should match every complexity.
+	f := LLMFeatureConfig{
+		Model:      "gpt-default",
+		ModelTiers: []ModelTier{{Model: "only-model", MaxComplexity: 0}},
+	}
+	for _, c := range []int{1, 2, 3, 4, 5} {
+		if got := f.SelectModel(c); got != "only-model" {
+			t.Errorf("complexity %d: got %q, want only-model", c, got)
+		}
+	}
+}
+
+func TestSelectModel_FallsBackWhenNoMatch(t *testing.T) {
+	// Tiers that don't cover the given complexity fall back to Model.
+	f := LLMFeatureConfig{
+		Model:      "gpt-default",
+		ModelTiers: []ModelTier{{Model: "mini", MaxComplexity: 2}},
+	}
+	if got := f.SelectModel(5); got != "gpt-default" {
+		t.Errorf("complexity 5 with no matching tier: got %q, want gpt-default", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // lookup helper
 // ---------------------------------------------------------------------------
 
