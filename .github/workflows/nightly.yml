@@ -1,21 +1,19 @@
 # file: .github/workflows/nightly.yml
-# version: 2.0.0
+# version: 3.0.0
 #
-# Three-phase matrix burndown:
+# Three-phase matrix burndown with optional parallel provider comparison:
 #
-#   triage    → 1 runner. collect+triage every repo, emit tasks.json
-#   dispatch  → 1 runner per task (matrix), worktree+agent+ghops
-#   aggregate → 1 runner. concatenate outcomes, render digest
+#   triage          → 1 runner. collect+triage every repo, emit tasks.json
+#   dispatch-openai → 1 runner per task (matrix), uses OpenAI codex-mini
+#   dispatch-claude → 1 runner per task (matrix), uses Claude haiku
+#                     (only in 'anthropic' or 'compare' mode)
+#   aggregate       → 1 runner. concatenate all outcomes, render digest
 #
-# Each phase uses ghcr.io/jdfalk/burndown-runner-image (public, no auth).
-# `triage` writes tasks.json + uploads it as an artifact; `dispatch` uses
-# fromJson(needs.triage.outputs.task_indices) to fan out one cell per
-# task index. `aggregate` always runs (even if some dispatch cells fail)
-# and downloads every outcome-*.json artifact to render a unified digest.
-#
-# The legacy single-runner Runner.Run() entry point is still on the
-# binary (`burndown run`) for ad-hoc local use; this workflow uses only
-# the matrix subcommands.
+# implementer_provider choices:
+#   openai    — only dispatch-openai runs (default / scheduled)
+#   anthropic — only dispatch-claude runs
+#   compare   — BOTH dispatch jobs run in parallel with cheapest models;
+#               branches are suffixed --openai / --claude so they don't collide
 
 name: Nightly burndown
 
@@ -25,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run mode (overrides config). dry-run is the safe default. review = ready-for-review PRs, no auto-merge.'
+        description: 'Run mode. dry-run is safe default; full enables auto-merge.'
         required: false
         default: 'dry-run'
         type: choice
@@ -36,8 +34,10 @@ on:
           - full
       implementer_provider:
         description: >
-          Implementer LLM backend. openai = Responses API with codex-mini/gpt-5 tiers + fallback chain.
-          anthropic = Claude haiku/sonnet/opus tiers (requires BURNDOWN_BOT_ANTHROPIC_API_KEY secret).
+          Implementer LLM backend.
+          openai = Responses API with codex-mini/gpt-5 tiers + fallback chain.
+          anthropic = Claude haiku/sonnet/opus tiers (requires BURNDOWN_BOT_CLAUDE_API_KEY).
+          compare = run BOTH at cheapest tier in parallel, branch names suffixed --openai/--claude.
           Scheduled nightlies always use openai.
         required: false
         default: 'openai'
@@ -45,6 +45,7 @@ on:
         options:
           - openai
           - anthropic
+          - compare
 
 permissions:
   contents: read
@@ -63,8 +64,6 @@ env:
 
 defaults:
   run:
-    # Container default is /bin/sh (dash on Ubuntu) which lacks `pipefail`.
-    # Force bash so `set -euo pipefail` works in every step.
     shell: bash
 
 jobs:
@@ -101,13 +100,12 @@ jobs:
       - name: Validate runtime credentials
         env:
           OPENAI_API_KEY: ${{ secrets.BURNDOWN_BOT_OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.BURNDOWN_BOT_ANTHROPIC_API_KEY }}
+          CLAUDE_API_KEY: ${{ secrets.BURNDOWN_BOT_CLAUDE_API_KEY }}
           GH_TOKEN: ${{ github.token }}
           IMPLEMENTER_PROVIDER: ${{ inputs.implementer_provider || 'openai' }}
         run: |
           set -euo pipefail
-          # Validate the key for whichever provider this run will use.
-          # Triage always uses OpenAI, so we check that key unconditionally.
+          # Triage always uses OpenAI, so that key is always required.
           if [ -z "${OPENAI_API_KEY:-}" ]; then
             echo "::error::BURNDOWN_BOT_OPENAI_API_KEY secret is not set (required for triage)"
             exit 1
@@ -119,23 +117,22 @@ jobs:
             exit 1
           fi
           echo "OpenAI key OK ($openai_code)"
-          # Anthropic key — required only when implementer_provider=anthropic.
-          if [ "$IMPLEMENTER_PROVIDER" = "anthropic" ]; then
-            if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-              echo "::error::BURNDOWN_BOT_ANTHROPIC_API_KEY secret is not set (required for anthropic provider)"
+          # Claude key — required for anthropic or compare modes.
+          if [ "$IMPLEMENTER_PROVIDER" = "anthropic" ] || [ "$IMPLEMENTER_PROVIDER" = "compare" ]; then
+            if [ -z "${CLAUDE_API_KEY:-}" ]; then
+              echo "::error::BURNDOWN_BOT_CLAUDE_API_KEY secret is not set (required for provider=$IMPLEMENTER_PROVIDER)"
               exit 1
             fi
-            anthropic_code=$(curl -sf -o /dev/null -w "%{http_code}" \
-              -H "x-api-key: $ANTHROPIC_API_KEY" \
+            claude_code=$(curl -sf -o /dev/null -w "%{http_code}" \
+              -H "x-api-key: $CLAUDE_API_KEY" \
               -H "anthropic-version: 2023-06-01" \
               https://api.anthropic.com/v1/models || true)
-            if [ "$anthropic_code" != "200" ]; then
-              echo "::error::Anthropic key rejected (HTTP $anthropic_code) — validate at console.anthropic.com"
+            if [ "$claude_code" != "200" ]; then
+              echo "::error::Claude key rejected (HTTP $claude_code) — validate at console.anthropic.com"
               exit 1
             fi
-            echo "Anthropic key OK ($anthropic_code)"
+            echo "Claude key OK ($claude_code)"
           fi
-          # GitHub token
           gh_code=$(curl -sf -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -147,13 +144,6 @@ jobs:
           echo "GitHub token OK ($gh_code)"
 
       - name: Build burndown from current commit
-        # Build from the workflow's own SHA rather than downloading the
-        # latest release — releases lag main and a binary/config skew
-        # (e.g. config emits a new field the older binary's parser
-        # rejects) silently breaks the run. Module cache (image bakes Go
-        # 1.25 + warmable proxy) keeps this to ~10s. Switch back to
-        # release-download once we have proper "release pinned to nightly
-        # commit" wiring.
         working-directory: burndown
         run: go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown
 
@@ -170,10 +160,10 @@ jobs:
           printf '%s\n' "$BURNDOWN_BOT_PRIVATE_KEY" > "$RUNNER_TEMP/keys/burndown-bot.pem"
           chmod 600 "$RUNNER_TEMP/keys/burndown-bot.pem"
 
-      - name: Render config
+      - name: Render config (triage always uses OpenAI for cost)
         env:
           MODE: ${{ inputs.mode || 'dry-run' }}
-          IMPLEMENTER_PROVIDER: ${{ inputs.implementer_provider || 'openai' }}
+          IMPLEMENTER_PROVIDER: openai
           WORKSPACE: ${{ github.workspace }}
           GH_APP_ID: ${{ secrets.BURNDOWN_BOT_APP_ID }}
           GH_APP_INSTALLATION_ID: ${{ secrets.BURNDOWN_BOT_INSTALLATION_ID }}
@@ -196,22 +186,12 @@ jobs:
 
       - name: Stage triage artifact (flatten paths)
         run: |
-          # upload-artifact v4 preserves the absolute path of any file outside
-          # the workspace, which would land tasks.json at <download-dir>/__w/_temp/
-          # instead of <download-dir>/. Stage everything into a single dir so
-          # the download side gets a flat layout.
           mkdir -p "$RUNNER_TEMP/triage-stage"
-          cp "$RUNNER_TEMP/tasks.json"   "$RUNNER_TEMP/triage-stage/"
-          cp "$RUNNER_TEMP/config.yaml"  "$RUNNER_TEMP/triage-stage/"
-          # State is a directory now (per-task .json files under tasks/, plus
-          # a meta.json). Copy the whole thing so dispatch + aggregate can
-          # reconstruct the catalog. cp -r is fine since the structure is
-          # already flat under burndown-state/.
+          cp "$RUNNER_TEMP/tasks.json"  "$RUNNER_TEMP/triage-stage/"
+          cp "$RUNNER_TEMP/config.yaml" "$RUNNER_TEMP/triage-stage/"
           if [ -d "$RUNNER_TEMP/burndown-state" ]; then
             cp -r "$RUNNER_TEMP/burndown-state" "$RUNNER_TEMP/triage-stage/"
           fi
-          # Legacy compat — tolerate older runs that may have left a single
-          # state.json in burndown-state/.
           if [ -f "$RUNNER_TEMP/burndown-state/state.json" ]; then
             cp "$RUNNER_TEMP/burndown-state/state.json" "$RUNNER_TEMP/triage-stage/"
           fi
@@ -227,9 +207,6 @@ jobs:
         id: emit
         run: |
           set -eu
-          # GitHub Actions matrix has a 256-cell cap; we fan out on
-          # array indices, not whole task objects, both to stay under
-          # the cap and to keep job names readable.
           count=$(jq '.tasks | length' "$RUNNER_TEMP/tasks.json")
           if [ "$count" -gt 256 ]; then
             echo "::warning::triage produced $count tasks, capping matrix at 256"
@@ -244,25 +221,21 @@ jobs:
           echo "task_indices=$indices" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
-  # Phase 2: Dispatch — one runner per task. The matrix is gated on the
-  # triage job producing at least one dispatchable task.
+  # Phase 2a: Dispatch (OpenAI) — skipped when implementer_provider=anthropic.
+  # Branches are suffixed --openai in compare mode; plain names otherwise.
   # ---------------------------------------------------------------------------
-  dispatch:
-    name: Dispatch task
+  dispatch-openai:
+    name: "Dispatch [OpenAI] task ${{ matrix.index }}"
     needs: triage
-    if: needs.triage.outputs.task_count != '0'
+    if: >-
+      needs.triage.outputs.task_count != '0' &&
+      inputs.implementer_provider != 'anthropic'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     container:
       image: ghcr.io/jdfalk/burndown-runner-image:bootstrap
     strategy:
       fail-fast: false
-      # The agent uses /v1/responses with PreviousResponseID, so iter N+1
-      # only sends the new function_call_output items — full history
-      # stays server-side. That collapses per-call token cost and lets us
-      # safely run 8 cells in parallel under codex-mini's TPM bucket.
-      # Lower if 429s recur; raise after observing token usage in a few
-      # nightlies.
       max-parallel: 8
       matrix:
         index: ${{ fromJson(needs.triage.outputs.task_indices) }}
@@ -283,58 +256,21 @@ jobs:
             !/testdata/audio/
           sparse-checkout-cone-mode: false
 
-      - name: Validate runtime credentials
+      - name: Validate OpenAI key
         env:
           OPENAI_API_KEY: ${{ secrets.BURNDOWN_BOT_OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.BURNDOWN_BOT_ANTHROPIC_API_KEY }}
-          GH_TOKEN: ${{ github.token }}
-          IMPLEMENTER_PROVIDER: ${{ inputs.implementer_provider || 'openai' }}
         run: |
           set -euo pipefail
           if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "::error::BURNDOWN_BOT_OPENAI_API_KEY secret is not set"
+            echo "::error::BURNDOWN_BOT_OPENAI_API_KEY is not set"
             exit 1
           fi
-          openai_code=$(curl -sf -o /dev/null -w "%{http_code}" \
+          code=$(curl -sf -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $OPENAI_API_KEY" https://api.openai.com/v1/models || true)
-          if [ "$openai_code" != "200" ]; then
-            echo "::error::OpenAI key rejected (HTTP $openai_code)"
-            exit 1
-          fi
-          echo "OpenAI key OK ($openai_code)"
-          if [ "$IMPLEMENTER_PROVIDER" = "anthropic" ]; then
-            if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-              echo "::error::BURNDOWN_BOT_ANTHROPIC_API_KEY secret is not set"
-              exit 1
-            fi
-            anthropic_code=$(curl -sf -o /dev/null -w "%{http_code}" \
-              -H "x-api-key: $ANTHROPIC_API_KEY" \
-              -H "anthropic-version: 2023-06-01" \
-              https://api.anthropic.com/v1/models || true)
-            if [ "$anthropic_code" != "200" ]; then
-              echo "::error::Anthropic key rejected (HTTP $anthropic_code)"
-              exit 1
-            fi
-            echo "Anthropic key OK ($anthropic_code)"
-          fi
-          gh_code=$(curl -sf -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${GITHUB_REPOSITORY} || true)
-          if [ "$gh_code" != "200" ]; then
-            echo "::error::GitHub token rejected (HTTP $gh_code)"
-            exit 1
-          fi
-          echo "GitHub token OK ($gh_code)"
+          [ "$code" = "200" ] || { echo "::error::OpenAI key rejected (HTTP $code)"; exit 1; }
+          echo "OpenAI key OK"
 
       - name: Build burndown from current commit
-        # Build from the workflow's own SHA rather than downloading the
-        # latest release — releases lag main and a binary/config skew
-        # (e.g. config emits a new field the older binary's parser
-        # rejects) silently breaks the run. Module cache (image bakes Go
-        # 1.25 + warmable proxy) keeps this to ~10s. Switch back to
-        # release-download once we have proper "release pinned to nightly
-        # commit" wiring.
         working-directory: burndown
         run: go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown
 
@@ -348,16 +284,29 @@ jobs:
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/burndown-state"
-          cp "$RUNNER_TEMP/triage/config.yaml" "$RUNNER_TEMP/config.yaml"
           cp "$RUNNER_TEMP/triage/tasks.json" "$RUNNER_TEMP/tasks.json"
-          # Per-task state files (preferred shape) — copy the whole dir.
           if [ -d "$RUNNER_TEMP/triage/burndown-state" ]; then
             cp -r "$RUNNER_TEMP/triage/burndown-state/." "$RUNNER_TEMP/burndown-state/"
           fi
-          # Legacy compat.
           cp "$RUNNER_TEMP/triage/state.json" "$RUNNER_TEMP/burndown-state/state.json" 2>/dev/null || true
 
-      - name: Materialize GitHub App key (per-cell)
+      - name: Render OpenAI config
+        env:
+          MODE: ${{ inputs.mode || 'dry-run' }}
+          IMPLEMENTER_PROVIDER: openai
+          # In compare mode, cap to cheapest model only so cost is comparable.
+          CHEAPEST_ONLY: ${{ inputs.implementer_provider == 'compare' && 'true' || 'false' }}
+          WORKSPACE: ${{ github.workspace }}
+          GH_APP_ID: ${{ secrets.BURNDOWN_BOT_APP_ID }}
+          GH_APP_INSTALLATION_ID: ${{ secrets.BURNDOWN_BOT_INSTALLATION_ID }}
+          GH_APP_PEM_PATH: ${{ runner.temp }}/keys/burndown-bot.pem
+        run: |
+          if [ ! -s "$GH_APP_PEM_PATH" ]; then
+            unset GH_APP_ID GH_APP_INSTALLATION_ID GH_APP_PEM_PATH
+          fi
+          python3 burndown/scripts/render-ci-config.py --out "$RUNNER_TEMP/config.yaml" >/dev/null
+
+      - name: Materialize GitHub App key
         env:
           BURNDOWN_BOT_PRIVATE_KEY: ${{ secrets.BURNDOWN_BOT_PRIVATE_KEY }}
         run: |
@@ -366,40 +315,174 @@ jobs:
           printf '%s\n' "$BURNDOWN_BOT_PRIVATE_KEY" > "$RUNNER_TEMP/keys/burndown-bot.pem"
           chmod 600 "$RUNNER_TEMP/keys/burndown-bot.pem"
 
-      - name: Dispatch task ${{ matrix.index }}
+      - name: Dispatch task ${{ matrix.index }} (OpenAI)
         env:
           OPENAI_API_KEY: ${{ secrets.BURNDOWN_BOT_OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.BURNDOWN_BOT_ANTHROPIC_API_KEY }}
         run: |
+          # In compare mode add --openai suffix so the branch doesn't collide
+          # with the parallel Claude run for the same task.
+          suffix=""
+          [ "${{ inputs.implementer_provider }}" = "compare" ] && suffix="--branch-suffix openai"
           "$RUNNER_TEMP/burndown" dispatch-one \
             --config "$RUNNER_TEMP/config.yaml" \
             --task-file "$RUNNER_TEMP/tasks.json" \
             --task-index ${{ matrix.index }} \
-            --out "$RUNNER_TEMP/outcome-${{ matrix.index }}.json"
+            --out "$RUNNER_TEMP/outcome-openai-${{ matrix.index }}.json" \
+            $suffix
 
-      - name: Stage outcome (flatten path)
+      - name: Stage outcome
         if: always()
         run: |
           mkdir -p "$RUNNER_TEMP/outcome-stage"
-          cp "$RUNNER_TEMP/outcome-${{ matrix.index }}.json" \
+          cp "$RUNNER_TEMP/outcome-openai-${{ matrix.index }}.json" \
              "$RUNNER_TEMP/outcome-stage/" 2>/dev/null || true
 
       - name: Upload outcome
         if: always()
         uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a # v4.3.6
         with:
-          name: burndown-outcome-${{ matrix.index }}
+          name: burndown-outcome-openai-${{ matrix.index }}
+          path: ${{ runner.temp }}/outcome-stage/
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Phase 2b: Dispatch (Claude) — runs only when implementer_provider is
+  # 'anthropic' or 'compare'. Branches suffixed --claude in compare mode.
+  # ---------------------------------------------------------------------------
+  dispatch-claude:
+    name: "Dispatch [Claude] task ${{ matrix.index }}"
+    needs: triage
+    if: >-
+      needs.triage.outputs.task_count != '0' &&
+      (inputs.implementer_provider == 'anthropic' || inputs.implementer_provider == 'compare')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/jdfalk/burndown-runner-image:bootstrap
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        index: ${{ fromJson(needs.triage.outputs.task_indices) }}
+    steps:
+      - name: Checkout overnight-burndown
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: burndown
+
+      - name: Checkout audiobook-organizer (sparse)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: jdfalk/audiobook-organizer
+          path: targets/audiobook-organizer
+          fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/testdata/audio/
+          sparse-checkout-cone-mode: false
+
+      - name: Validate Claude key
+        env:
+          CLAUDE_API_KEY: ${{ secrets.BURNDOWN_BOT_CLAUDE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLAUDE_API_KEY:-}" ]; then
+            echo "::error::BURNDOWN_BOT_CLAUDE_API_KEY is not set"
+            exit 1
+          fi
+          code=$(curl -sf -o /dev/null -w "%{http_code}" \
+            -H "x-api-key: $CLAUDE_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            https://api.anthropic.com/v1/models || true)
+          [ "$code" = "200" ] || { echo "::error::Claude key rejected (HTTP $code)"; exit 1; }
+          echo "Claude key OK"
+
+      - name: Build burndown from current commit
+        working-directory: burndown
+        run: go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown
+
+      - name: Download triage artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: burndown-triage
+          path: ${{ runner.temp }}/triage
+
+      - name: Stage triage outputs
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/burndown-state"
+          cp "$RUNNER_TEMP/triage/tasks.json" "$RUNNER_TEMP/tasks.json"
+          if [ -d "$RUNNER_TEMP/triage/burndown-state" ]; then
+            cp -r "$RUNNER_TEMP/triage/burndown-state/." "$RUNNER_TEMP/burndown-state/"
+          fi
+          cp "$RUNNER_TEMP/triage/state.json" "$RUNNER_TEMP/burndown-state/state.json" 2>/dev/null || true
+
+      - name: Render Claude config
+        env:
+          MODE: ${{ inputs.mode || 'dry-run' }}
+          IMPLEMENTER_PROVIDER: anthropic
+          # Always cheapest-only for Claude runs; haiku is the base model.
+          CHEAPEST_ONLY: "true"
+          WORKSPACE: ${{ github.workspace }}
+          GH_APP_ID: ${{ secrets.BURNDOWN_BOT_APP_ID }}
+          GH_APP_INSTALLATION_ID: ${{ secrets.BURNDOWN_BOT_INSTALLATION_ID }}
+          GH_APP_PEM_PATH: ${{ runner.temp }}/keys/burndown-bot.pem
+        run: |
+          if [ ! -s "$GH_APP_PEM_PATH" ]; then
+            unset GH_APP_ID GH_APP_INSTALLATION_ID GH_APP_PEM_PATH
+          fi
+          python3 burndown/scripts/render-ci-config.py --out "$RUNNER_TEMP/config.yaml" >/dev/null
+
+      - name: Materialize GitHub App key
+        env:
+          BURNDOWN_BOT_PRIVATE_KEY: ${{ secrets.BURNDOWN_BOT_PRIVATE_KEY }}
+        run: |
+          [ -z "$BURNDOWN_BOT_PRIVATE_KEY" ] && exit 0
+          mkdir -p "$RUNNER_TEMP/keys" && chmod 700 "$RUNNER_TEMP/keys"
+          printf '%s\n' "$BURNDOWN_BOT_PRIVATE_KEY" > "$RUNNER_TEMP/keys/burndown-bot.pem"
+          chmod 600 "$RUNNER_TEMP/keys/burndown-bot.pem"
+
+      - name: Dispatch task ${{ matrix.index }} (Claude)
+        env:
+          # The Anthropic SDK reads ANTHROPIC_API_KEY; map our secret to it.
+          ANTHROPIC_API_KEY: ${{ secrets.BURNDOWN_BOT_CLAUDE_API_KEY }}
+        run: |
+          # In compare mode add --claude suffix; in anthropic-only mode,
+          # branches keep their natural names.
+          suffix=""
+          [ "${{ inputs.implementer_provider }}" = "compare" ] && suffix="--branch-suffix claude"
+          "$RUNNER_TEMP/burndown" dispatch-one \
+            --config "$RUNNER_TEMP/config.yaml" \
+            --task-file "$RUNNER_TEMP/tasks.json" \
+            --task-index ${{ matrix.index }} \
+            --out "$RUNNER_TEMP/outcome-claude-${{ matrix.index }}.json" \
+            $suffix
+
+      - name: Stage outcome
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/outcome-stage"
+          cp "$RUNNER_TEMP/outcome-claude-${{ matrix.index }}.json" \
+             "$RUNNER_TEMP/outcome-stage/" 2>/dev/null || true
+
+      - name: Upload outcome
+        if: always()
+        uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a # v4.3.6
+        with:
+          name: burndown-outcome-claude-${{ matrix.index }}
           path: ${{ runner.temp }}/outcome-stage/
           if-no-files-found: warn
           retention-days: 7
 
   # ---------------------------------------------------------------------------
   # Phase 3: Aggregate — runs even if some dispatch cells failed, so the
-  # digest always reports the full picture.
+  # digest always reports the full picture. Downloads outcomes from both
+  # providers; missing sets (skipped jobs) are silently ignored.
   # ---------------------------------------------------------------------------
   aggregate:
     name: Aggregate digest
-    needs: [triage, dispatch]
+    needs: [triage, dispatch-openai, dispatch-claude]
     if: always() && needs.triage.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -411,58 +494,7 @@ jobs:
         with:
           path: burndown
 
-      - name: Validate runtime credentials
-        env:
-          OPENAI_API_KEY: ${{ secrets.BURNDOWN_BOT_OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.BURNDOWN_BOT_ANTHROPIC_API_KEY }}
-          GH_TOKEN: ${{ github.token }}
-          IMPLEMENTER_PROVIDER: ${{ inputs.implementer_provider || 'openai' }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "::error::BURNDOWN_BOT_OPENAI_API_KEY secret is not set"
-            exit 1
-          fi
-          openai_code=$(curl -sf -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $OPENAI_API_KEY" https://api.openai.com/v1/models || true)
-          if [ "$openai_code" != "200" ]; then
-            echo "::error::OpenAI key rejected (HTTP $openai_code)"
-            exit 1
-          fi
-          echo "OpenAI key OK ($openai_code)"
-          if [ "$IMPLEMENTER_PROVIDER" = "anthropic" ]; then
-            if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-              echo "::error::BURNDOWN_BOT_ANTHROPIC_API_KEY secret is not set"
-              exit 1
-            fi
-            anthropic_code=$(curl -sf -o /dev/null -w "%{http_code}" \
-              -H "x-api-key: $ANTHROPIC_API_KEY" \
-              -H "anthropic-version: 2023-06-01" \
-              https://api.anthropic.com/v1/models || true)
-            if [ "$anthropic_code" != "200" ]; then
-              echo "::error::Anthropic key rejected (HTTP $anthropic_code)"
-              exit 1
-            fi
-            echo "Anthropic key OK ($anthropic_code)"
-          fi
-          gh_code=$(curl -sf -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${GITHUB_REPOSITORY} || true)
-          if [ "$gh_code" != "200" ]; then
-            echo "::error::GitHub token rejected (HTTP $gh_code)"
-            exit 1
-          fi
-          echo "GitHub token OK ($gh_code)"
-
       - name: Build burndown from current commit
-        # Build from the workflow's own SHA rather than downloading the
-        # latest release — releases lag main and a binary/config skew
-        # (e.g. config emits a new field the older binary's parser
-        # rejects) silently breaks the run. Module cache (image bakes Go
-        # 1.25 + warmable proxy) keeps this to ~10s. Switch back to
-        # release-download once we have proper "release pinned to nightly
-        # commit" wiring.
         working-directory: burndown
         run: go build -o "$RUNNER_TEMP/burndown" ./cmd/burndown
 
@@ -472,33 +504,41 @@ jobs:
           name: burndown-triage
           path: ${{ runner.temp }}/triage
 
-      - name: Download every outcome artifact
+      - name: Download OpenAI outcome artifacts
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
-          pattern: burndown-outcome-*
+          pattern: burndown-outcome-openai-*
           merge-multiple: true
           path: ${{ runner.temp }}/outcomes
+        continue-on-error: true
+
+      - name: Download Claude outcome artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          pattern: burndown-outcome-claude-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/outcomes
+        continue-on-error: true
 
       - name: Inspect outcome JSONs (per-task fail summary)
         if: always()
         run: |
           set -euo pipefail
           shopt -s nullglob
-          fails=0
-          successes=0
+          fails=0 successes=0
           echo "=== Per-task outcomes ==="
-          for f in "$RUNNER_TEMP/outcomes/"outcome-*.json; do
+          for f in "$RUNNER_TEMP/outcomes/"*.json; do
             status=$(jq -r '.Status // empty' "$f")
             title=$(jq -r '.Task.Source.Title // empty' "$f")
             err=$(jq -r '.Error // empty' "$f")
             branch=$(jq -r '.Branch // empty' "$f")
             if [ "$status" = "failed" ]; then
               fails=$((fails+1))
-              printf '%s\n' "FAIL  [$branch] $title"
-              [ -n "$err" ] && printf '%s\n' "       error: $err"
+              printf 'FAIL  [%s] %s\n' "$branch" "$title"
+              [ -n "$err" ] && printf '      error: %s\n' "$err"
             else
               successes=$((successes+1))
-              printf '%s\n' "OK    [$branch] $title ($status)"
+              printf 'OK    [%s] %s (%s)\n' "$branch" "$title" "$status"
             fi
           done
           echo "=== Totals: $successes ok / $fails failed ==="
@@ -519,7 +559,7 @@ jobs:
           if [ -s "$RUNNER_TEMP/burndown-digest/digest.md" ]; then
             cat "$RUNNER_TEMP/burndown-digest/digest.md" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "## ⚠️ No digest produced" >> "$GITHUB_STEP_SUMMARY"
+            echo "## No digest produced" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload digest

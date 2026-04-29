@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/render-ci-config.py
-# version: 1.1.0
+# version: 1.2.0
 """Emit a burndown config.yaml from environment variables.
 
 Replaces a fragile nested-bash-heredoc rendering step. All inputs come
@@ -15,8 +15,12 @@ Required env:
 Optional env:
   IMPLEMENTER_PROVIDER  - openai | anthropic  (default: openai)
                           Controls which LLM backend runs the agent loop.
-                          Set via the workflow_dispatch 'implementer_provider'
-                          input; the scheduled nightly always uses 'openai'.
+
+  CHEAPEST_ONLY     - 1 | true | yes  (default: false)
+                      When set, emits only the cheapest single model for the
+                      provider with no model_tiers escalation chain. Use in
+                      compare mode to keep both providers at parity cost-wise
+                      so results are a fair quality comparison, not a cost one.
 
   GH_APP_ID
   GH_APP_INSTALLATION_ID
@@ -35,6 +39,7 @@ def render() -> str:
     workspace = os.environ["WORKSPACE"]
     tmp = os.environ["RUNNER_TEMP"]
     provider = os.environ.get("IMPLEMENTER_PROVIDER", "openai").strip().lower()
+    cheapest_only = os.environ.get("CHEAPEST_ONLY", "").strip().lower() in ("1", "true", "yes")
 
     app_id = os.environ.get("GH_APP_ID", "").strip()
     install_id = os.environ.get("GH_APP_INSTALLATION_ID", "").strip()
@@ -73,7 +78,16 @@ triage:
     # Implementer — selected via IMPLEMENTER_PROVIDER.
     # ------------------------------------------------------------------
     if provider == "anthropic":
-        sections.append("""\
+        if cheapest_only:
+            sections.append("""\
+# Anthropic implementer — cheapest-only mode (no tier escalation).
+# Used in compare mode so cost is held constant across providers.
+implementer:
+  provider: anthropic
+  model: claude-haiku-4-5-20251001
+""")
+        else:
+            sections.append("""\
 # Anthropic implementer — uses Claude haiku/sonnet/opus via model_tiers.
 # Activate by setting IMPLEMENTER_PROVIDER=anthropic in the workflow
 # dispatch input, or by running:
@@ -93,8 +107,18 @@ implementer:
     # Tier selection (pick-once-before-loop) is the right model here.
 """)
     else:
-        # Default: OpenAI Responses path with tier selection + fallback chain.
-        sections.append("""\
+        # Default: OpenAI Responses path.
+        if cheapest_only:
+            sections.append("""\
+# OpenAI implementer — cheapest-only mode (no tier escalation).
+# Used in compare mode so cost is held constant across providers.
+implementer:
+  provider: openai
+  model: gpt-5.1-codex-mini
+  # api: responses (default)
+""")
+        else:
+            sections.append("""\
 # OpenAI implementer — uses Responses API (/v1/responses) with
 # PreviousResponseID threading. Tier selection picks the cheapest model
 # expected to handle the task's complexity; the fallback chain escalates
