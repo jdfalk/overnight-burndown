@@ -62,6 +62,10 @@ type Options struct {
 type Result struct {
 	Iterations int
 	StopReason anthropic.StopReason
+	// Model is the model ID that was actually used for this run. Populated
+	// by all three agent runners so the harness can apply a model:<name>
+	// label for training-signal collection.
+	Model string
 	// Summary is the agent's final assistant text — captured for the
 	// morning digest and the PR body.
 	Summary string
@@ -163,7 +167,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		anthropic.NewUserMessage(anthropic.NewTextBlock(buildUserMessage(opts))),
 	}
 
-	res := &Result{}
+	res := &Result{Model: string(opts.Model)}
 	for i := 0; i < opts.MaxIterations; i++ {
 		res.Iterations = i + 1
 

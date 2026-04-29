@@ -1,5 +1,5 @@
 // file: internal/agent/openai_responses.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
 //
 // OpenAI Responses API implementer agent. Counterpart to RunOpenAI in
@@ -72,7 +72,7 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, model string,
 		return nil, errors.New("agent: no MCP tools matched the allowlist")
 	}
 
-	res := &Result{}
+	res := &Result{Model: model}
 	// First iteration: fresh conversation seeded with the user task; later
 	// iterations send only the resolved tool outputs and PreviousResponseID.
 	input := responses.ResponseNewParamsInputUnion{
