@@ -46,6 +46,14 @@ on:
           - openai
           - anthropic
           - compare
+      use_powerful_models:
+        description: >
+          Use the most powerful model (gpt-5 / claude-opus-4-7) for every task,
+          ignoring complexity-based tier selection. Use when cheaper models are
+          returning no-change on tasks that require real multi-file implementation.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -303,8 +311,8 @@ jobs:
         env:
           MODE: ${{ inputs.mode || 'dry-run' }}
           IMPLEMENTER_PROVIDER: openai
-          # In compare mode, cap to cheapest model only so cost is comparable.
           CHEAPEST_ONLY: ${{ inputs.implementer_provider == 'compare' && 'true' || 'false' }}
+          POWERFUL_ONLY: ${{ inputs.use_powerful_models && 'true' || 'false' }}
           WORKSPACE: ${{ github.workspace }}
           GH_APP_ID: ${{ secrets.BURNDOWN_BOT_APP_ID }}
           GH_APP_INSTALLATION_ID: ${{ secrets.BURNDOWN_BOT_INSTALLATION_ID }}

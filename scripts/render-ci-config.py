@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/render-ci-config.py
-# version: 1.2.0
+# version: 1.3.0
 """Emit a burndown config.yaml from environment variables.
 
 Replaces a fragile nested-bash-heredoc rendering step. All inputs come
@@ -22,6 +22,13 @@ Optional env:
                       compare mode to keep both providers at parity cost-wise
                       so results are a fair quality comparison, not a cost one.
 
+  POWERFUL_ONLY     - 1 | true | yes  (default: false)
+                      When set, emits only the most powerful single model for
+                      the provider (gpt-5 / claude-opus-4-7) with no tier
+                      escalation. Use when tasks require deep multi-file
+                      implementation that cheaper models abandon as no-change.
+                      Mutually exclusive with CHEAPEST_ONLY; POWERFUL_ONLY wins.
+
   GH_APP_ID
   GH_APP_INSTALLATION_ID
   GH_APP_PEM_PATH   - path to materialized PEM file
@@ -40,6 +47,9 @@ def render() -> str:
     tmp = os.environ["RUNNER_TEMP"]
     provider = os.environ.get("IMPLEMENTER_PROVIDER", "openai").strip().lower()
     cheapest_only = os.environ.get("CHEAPEST_ONLY", "").strip().lower() in ("1", "true", "yes")
+    powerful_only = os.environ.get("POWERFUL_ONLY", "").strip().lower() in ("1", "true", "yes")
+    if powerful_only:
+        cheapest_only = False  # powerful wins
 
     app_id = os.environ.get("GH_APP_ID", "").strip()
     install_id = os.environ.get("GH_APP_INSTALLATION_ID", "").strip()
@@ -84,17 +94,21 @@ triage:
         if cheapest_only:
             sections.append("""\
 # Anthropic implementer — cheapest-only mode (no tier escalation).
-# Used in compare mode so cost is held constant across providers.
 implementer:
   provider: anthropic
   model: claude-haiku-4-5-20251001
 """)
+        elif powerful_only:
+            sections.append("""\
+# Anthropic implementer — powerful-only mode (opus for all tasks).
+# Use when cheaper models return no-change on real multi-file work.
+implementer:
+  provider: anthropic
+  model: claude-opus-4-7
+""")
         else:
             sections.append("""\
-# Anthropic implementer — uses Claude haiku/sonnet/opus via model_tiers.
-# Activate by setting IMPLEMENTER_PROVIDER=anthropic in the workflow
-# dispatch input, or by running:
-#   MODE=dry-run IMPLEMENTER_PROVIDER=anthropic ... render-ci-config.py
+# Anthropic implementer — haiku/sonnet/opus tiers by complexity.
 implementer:
   provider: anthropic
   model: claude-haiku-4-5-20251001   # catch-all when no tier matches
@@ -104,29 +118,30 @@ implementer:
     - model: claude-sonnet-4-6           # medium — complexity 3–4
       max_complexity: 4
     - model: claude-opus-4-7             # hardest — complexity 5
-    # No max_complexity on the last tier = catch-all for any score above 4.
-    # No runtime fallback chain: Anthropic has no PreviousResponseID
-    # equivalent, so mid-task model swap would re-upload full history.
-    # Tier selection (pick-once-before-loop) is the right model here.
 """)
     else:
         # Default: OpenAI Responses path.
         if cheapest_only:
             sections.append("""\
-# OpenAI implementer — cheapest-only mode (no tier escalation).
-# Used in compare mode so cost is held constant across providers.
+# OpenAI implementer — cheapest-only mode (codex-mini, no tier escalation).
 implementer:
   provider: openai
   model: gpt-5.1-codex-mini
-  # api: responses (default)
+""")
+        elif powerful_only:
+            sections.append("""\
+# OpenAI implementer — powerful-only mode (gpt-5 for all tasks).
+# Use when cheaper models return no-change on real multi-file work.
+# gpt-5 has higher TPM limits so fewer 429s at this concurrency level.
+implementer:
+  provider: openai
+  model: gpt-5
 """)
         else:
             sections.append("""\
-# OpenAI implementer — uses Responses API (/v1/responses) with
-# PreviousResponseID threading. Tier selection picks the cheapest model
-# expected to handle the task's complexity; the fallback chain escalates
-# when that model exhausts its 429-retry budget. PreviousResponseID
-# carries the conversation across the swap with no token re-upload.
+# OpenAI implementer — Responses API with tier escalation.
+# Tier selection picks the cheapest model for the task complexity;
+# fallback chain escalates on 429-budget exhaustion.
 implementer:
   provider: openai
   model: gpt-5.1-codex-mini    # catch-all when no tier matches
@@ -136,11 +151,6 @@ implementer:
     - model: gpt-5.3-codex         # moderate — complexity 3–4
       max_complexity: 4
     - model: gpt-5                 # hardest — complexity 5
-    # No max_complexity on the last entry = catch-all for complexity 5+.
-    # FallbacksFrom(complexity) automatically builds the runtime chain from
-    # tiers above the selected one, so escalation is config-free.
-  # api: responses   (default — set to chat-completions to revert to the
-  # legacy /v1/chat/completions path during soak)
 """)
 
     # ------------------------------------------------------------------
@@ -155,8 +165,8 @@ paths:
   log_dir: {tmp}/burndown-state/logs
 
 budget:
-  max_dollars: 5.0
-  max_wall_seconds: 3000
+  max_dollars: {"20.0" if powerful_only else "5.0"}
+  max_wall_seconds: {"5400" if powerful_only else "3000"}
   abort_threshold: 0.8
 
 concurrency:
