@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/openai/openai-go"
@@ -121,12 +122,17 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, models []stri
 		// Token-usage accounting per call. Responses uses InputTokens /
 		// OutputTokens (vs PromptTokens / CompletionTokens on Chat
 		// Completions). The cached subset is under InputTokensDetails.
-		res.Usage.Add(TokenUsage{
+		iterUsage := TokenUsage{
 			PromptTokens:     resp.Usage.InputTokens,
 			CompletionTokens: resp.Usage.OutputTokens,
 			CachedTokens:     resp.Usage.InputTokensDetails.CachedTokens,
 			TotalTokens:      resp.Usage.TotalTokens,
-		})
+		}
+		res.Usage.Add(iterUsage)
+		fmt.Fprintf(stderr, "[agent] iter=%d model=%s prompt=%d cached=%d out=%d cumulative_tools=%d\n",
+			res.Iterations, models[modelIdx],
+			iterUsage.PromptTokens, iterUsage.CachedTokens, iterUsage.CompletionTokens,
+			res.ToolCallCount)
 
 		// Walk the output items: capture text into res.Summary, collect
 		// any function_call items for execution, surface stop reason.
@@ -164,6 +170,11 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, models []stri
 		// list of function_call_output items keyed by CallID. The model
 		// will see these (via PreviousResponseID + the new Input) on the
 		// next loop pass.
+		toolNames := make([]string, 0, len(toolCalls))
+		for _, tc := range toolCalls {
+			toolNames = append(toolNames, tc.Name)
+		}
+		fmt.Fprintf(stderr, "[agent] iter=%d calling tools: %s\n", res.Iterations, strings.Join(toolNames, ", "))
 		nextItems := make(responses.ResponseInputParam, 0, len(toolCalls))
 		for _, tc := range toolCalls {
 			res.ToolCallCount++
