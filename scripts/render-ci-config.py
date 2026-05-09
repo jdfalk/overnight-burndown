@@ -19,22 +19,18 @@ Optional env:
   IMPLEMENTER_PROVIDER  - openai | anthropic  (default: openai)
                           Controls which LLM backend runs the agent loop.
 
-  TRIAGE_PROVIDER   - openai | anthropic  (default: openai)
-                      When anthropic, triage uses claude-opus-4-7 with
-                      extended thinking (8000 budget tokens).
+  TRIAGE_MODEL      - OpenAI model for triage (default: o4-mini)
+                      Override when a different model is preferred for task
+                      classification; any model accessible to OPENAI_API_KEY.
 
   CHEAPEST_ONLY     - 1 | true | yes  (default: false)
                       When set, emits only the cheapest single model for the
-                      provider with no model_tiers escalation chain. Use in
-                      compare mode to keep both providers at parity cost-wise
-                      so results are a fair quality comparison, not a cost one.
+                      provider with no model_tiers escalation chain.
 
   POWERFUL_ONLY     - 1 | true | yes  (default: false)
                       When set, emits only the most powerful single model for
-                      the provider (gpt-5 / claude-opus-4-7) with no tier
-                      escalation. Use when tasks require deep multi-file
-                      implementation that cheaper models abandon as no-change.
-                      Mutually exclusive with CHEAPEST_ONLY; POWERFUL_ONLY wins.
+                      the provider. Mutually exclusive with CHEAPEST_ONLY;
+                      POWERFUL_ONLY wins.
 
   GH_APP_ID
   GH_APP_INSTALLATION_ID
@@ -55,7 +51,7 @@ def render() -> str:
     repo_name = os.environ.get("REPO_NAME", "audiobook-organizer").strip()
     repo_owner = os.environ.get("REPO_OWNER", "jdfalk").strip()
     provider = os.environ.get("IMPLEMENTER_PROVIDER", "openai").strip().lower()
-    triage_provider = os.environ.get("TRIAGE_PROVIDER", "openai").strip().lower()
+    triage_model = os.environ.get("TRIAGE_MODEL", "o4-mini").strip()
     cheapest_only = os.environ.get("CHEAPEST_ONLY", "").strip().lower() in ("1", "true", "yes")
     powerful_only = os.environ.get("POWERFUL_ONLY", "").strip().lower() in ("1", "true", "yes")
     if powerful_only:
@@ -71,33 +67,26 @@ def render() -> str:
     # ------------------------------------------------------------------
     # Provider credentials. Include whichever providers are needed.
     # ------------------------------------------------------------------
-    if triage_provider == "openai" or provider == "openai":
-        sections.append("""\
+    sections.append("""\
 openai:
   api_key_env: OPENAI_API_KEY
 """)
-    if triage_provider == "anthropic" or provider == "anthropic":
+    if provider == "anthropic":
         sections.append("""\
 anthropic:
   api_key_env: ANTHROPIC_API_KEY
 """)
 
     # ------------------------------------------------------------------
-    # Triage — OpenAI by default (fast + cheap); Anthropic when
-    # TRIAGE_PROVIDER=anthropic (uses Opus with extended thinking).
+    # Triage — always OpenAI. o4-mini has native reasoning which gives
+    # Opus-class cross-cutting constraint analysis at a fraction of the
+    # cost. Override with TRIAGE_MODEL env var if a different model is
+    # preferred (e.g. gpt-5 for maximum quality).
     # ------------------------------------------------------------------
-    if triage_provider == "anthropic":
-        sections.append("""\
-triage:
-  provider: anthropic
-  model: claude-opus-4-7
-  thinking_budget_tokens: 8000
-""")
-    else:
-        sections.append("""\
+    sections.append(f"""\
 triage:
   provider: openai
-  model: gpt-5-mini
+  model: {triage_model}
 """)
 
     # ------------------------------------------------------------------
