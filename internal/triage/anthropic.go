@@ -75,16 +75,9 @@ func (t *AnthropicTriager) Triage(ctx context.Context, tasks []sources.Task) ([]
 		}},
 	}
 
-	// MaxTokens must cover both thinking tokens (if enabled) and output tokens.
-	// Output for N tasks is small (< 2K), so thinking budget + 4096 is always safe.
-	maxTokens := int64(16000)
-	if t.thinkingBudget > 0 && t.thinkingBudget+4096 > maxTokens {
-		maxTokens = t.thinkingBudget + 4096
-	}
-
 	params := anthropic.MessageNewParams{
 		Model:     t.model,
-		MaxTokens: maxTokens,
+		MaxTokens: 16000,
 		System: []anthropic.TextBlockParam{{
 			Text:         classificationSystemPrompt,
 			CacheControl: anthropic.NewCacheControlEphemeralParam(),
@@ -99,10 +92,16 @@ func (t *AnthropicTriager) Triage(ctx context.Context, tasks []sources.Task) ([]
 	}
 
 	if t.thinkingBudget >= 1024 {
-		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(t.thinkingBudget)
-		// Anthropic rejects tool_choice=forced when thinking is enabled.
-		// Switch to auto — the system prompt instructs the model to call
-		// record_classifications; extractAnthropicDecisions validates it did.
+		// claude-opus-4-7+ requires adaptive thinking; budget_tokens is rejected.
+		// thinkingBudget >= 1024 is used as a sentinel to enable thinking at all.
+		// Forced tool choice is also incompatible with thinking — switch to auto;
+		// the system prompt instructs the model and extractAnthropicDecisions validates.
+		params.Thinking = anthropic.ThinkingConfigParamUnion{
+			OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{},
+		}
+		params.OutputConfig = anthropic.OutputConfigParam{
+			Effort: anthropic.OutputConfigEffortHigh,
+		}
 		params.ToolChoice = anthropic.ToolChoiceUnionParam{
 			OfAuto: &anthropic.ToolChoiceAutoParam{},
 		}
