@@ -14,8 +14,9 @@ import (
 
 // AnthropicTriager classifies tasks via Anthropic Messages API + tool-forced output.
 type AnthropicTriager struct {
-	client anthropic.Client
-	model  anthropic.Model
+	client        anthropic.Client
+	model         anthropic.Model
+	thinkingBudget int64 // 0 = disabled; ≥1024 = enabled (tokens Opus may use to think)
 }
 
 // NewAnthropic constructs an Anthropic-backed triage Provider. The api key
@@ -28,6 +29,16 @@ func NewAnthropic(model string, opts ...option.RequestOption) *AnthropicTriager 
 	}
 }
 
+// NewAnthropicWithThinking is like NewAnthropic but enables extended thinking
+// with the given budget. budgetTokens must be ≥ 1024; the model thinks for up
+// to that many tokens before producing its tool-forced output. Recommended
+// range for triage: 4096 (medium) to 10000 (high) — see docs/burndown-thinking.md.
+func NewAnthropicWithThinking(model string, budgetTokens int64, opts ...option.RequestOption) *AnthropicTriager {
+	t := NewAnthropic(model, opts...)
+	t.thinkingBudget = budgetTokens
+	return t
+}
+
 // NewTriager is a backward-compat alias for NewAnthropic. Existing call
 // sites and tests continue to work unchanged.
 func NewTriager(model string, opts ...option.RequestOption) *AnthropicTriager {
@@ -38,6 +49,11 @@ func NewTriager(model string, opts ...option.RequestOption) *AnthropicTriager {
 type Triager = AnthropicTriager
 
 // Triage implements Provider via Anthropic's tool-forced output.
+//
+// When thinkingBudget > 0, extended thinking is enabled: Opus reasons through
+// cross-cutting constraints and risk before writing its classification JSON.
+// Thinking blocks in the response are skipped transparently by
+// extractAnthropicDecisions — only the ToolUseBlock matters.
 func (t *AnthropicTriager) Triage(ctx context.Context, tasks []sources.Task) ([]Decision, error) {
 	if len(tasks) == 0 {
 		return nil, nil
@@ -59,9 +75,16 @@ func (t *AnthropicTriager) Triage(ctx context.Context, tasks []sources.Task) ([]
 		}},
 	}
 
+	// MaxTokens must cover both thinking tokens (if enabled) and output tokens.
+	// Output for N tasks is small (< 2K), so thinking budget + 4096 is always safe.
+	maxTokens := int64(16000)
+	if t.thinkingBudget > 0 && t.thinkingBudget+4096 > maxTokens {
+		maxTokens = t.thinkingBudget + 4096
+	}
+
 	params := anthropic.MessageNewParams{
 		Model:     t.model,
-		MaxTokens: 16000,
+		MaxTokens: maxTokens,
 		System: []anthropic.TextBlockParam{{
 			Text:         classificationSystemPrompt,
 			CacheControl: anthropic.NewCacheControlEphemeralParam(),
@@ -73,6 +96,10 @@ func (t *AnthropicTriager) Triage(ctx context.Context, tasks []sources.Task) ([]
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(userPayload)),
 		},
+	}
+
+	if t.thinkingBudget >= 1024 {
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(t.thinkingBudget)
 	}
 
 	resp, err := t.client.Messages.New(ctx, params)

@@ -200,6 +200,11 @@ type LLMFeatureConfig struct {
 	// /v1/chat/completions path; kept while we soak the Responses
 	// migration. Ignored when Provider != openai.
 	API OpenAIAPIName `yaml:"api,omitempty"`
+	// ThinkingBudgetTokens enables Anthropic extended thinking when > 0.
+	// Recommended: 8000 for triage with Opus 4.7 (medium-high effort).
+	// 0 = disabled (default, preserves prior behavior).
+	// Ignored when Provider != anthropic.
+	ThinkingBudgetTokens int64 `yaml:"thinking_budget_tokens,omitempty"`
 }
 
 // SelectModel returns the best model for the given task complexity (1–5).

@@ -717,10 +717,19 @@ func (r *Runner) applyDefaults() {
 				openaiOption.WithAPIKey(os.Getenv(r.Config.OpenAI.APIKeyEnv)),
 			)
 		default: // anthropic
-			r.Triager = triage.NewAnthropic(
-				r.Config.Triage.Model,
-				option.WithAPIKey(os.Getenv(r.Config.Anthropic.APIKeyEnv)),
-			)
+			apiKey := os.Getenv(r.Config.Anthropic.APIKeyEnv)
+			if r.Config.Triage.ThinkingBudgetTokens >= 1024 {
+				r.Triager = triage.NewAnthropicWithThinking(
+					r.Config.Triage.Model,
+					r.Config.Triage.ThinkingBudgetTokens,
+					option.WithAPIKey(apiKey),
+				)
+			} else {
+				r.Triager = triage.NewAnthropic(
+					r.Config.Triage.Model,
+					option.WithAPIKey(apiKey),
+				)
+			}
 		}
 	}
 	if r.AuthForRepo == nil {
