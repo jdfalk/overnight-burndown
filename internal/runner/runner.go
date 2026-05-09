@@ -250,11 +250,18 @@ func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t triag
 		}
 	}
 
-	// Collect.
+	// Collect. Use hub-based issue collector when a task_hub is configured;
+	// otherwise fall back to reading auto-ok issues from the target repo.
+	var issueCollector sources.Collector
+	if r.Config.TaskHub.Repo != "" {
+		issueCollector = sources.NewHubIssueCollector(ghClient, r.Config.TaskHub.Repo, r.Config.TaskHub.LabelPrefix)
+	} else {
+		issueCollector = sources.NewIssueCollector(ghClient)
+	}
 	collectors := []sources.Collector{
 		sources.NewTODOCollector(),
 		sources.NewPlanCollector(),
-		sources.NewIssueCollector(ghClient),
+		issueCollector,
 	}
 	tasks, err := sources.CollectAll(ctx, repoFullName, repoCfg.LocalPath, collectors...)
 	if err != nil {

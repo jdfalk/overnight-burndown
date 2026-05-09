@@ -48,6 +48,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -113,11 +114,24 @@ type Config struct {
 	Triage      LLMFeatureConfig   `yaml:"triage"`
 	Implementer LLMFeatureConfig   `yaml:"implementer"`
 	GitHub      GitHubConfig       `yaml:"github"`
+	TaskHub     TaskHubConfig      `yaml:"task_hub"`
 	Paths       PathsConfig        `yaml:"paths"`
 	Budget      BudgetConfig       `yaml:"budget"`
 	Concurrency ConcurrencyConfig  `yaml:"concurrency"`
 	Defaults    Defaults           `yaml:"defaults"`
 	Repos       []RepoConfig       `yaml:"repos"`
+}
+
+// TaskHubConfig identifies a central GitHub repository that holds task specs
+// as Issues with routing labels. When set, the IssueCollector reads from this
+// hub repo and filters by "{LabelPrefix}{repo.name}" instead of reading
+// auto-ok issues from each target repo directly.
+type TaskHubConfig struct {
+	// Repo is "owner/name" of the hub repository, e.g. "jdfalk/burndown-tasks".
+	Repo string `yaml:"repo"`
+	// LabelPrefix is prepended to the target repo name to form the routing
+	// label, e.g. "repo:" produces "repo:audiobook-organizer".
+	LabelPrefix string `yaml:"label_prefix"`
 }
 
 // AnthropicConfig holds Anthropic credentials + the legacy model fields.
@@ -239,12 +253,25 @@ const (
 	OpenAIAPIChatCompletions OpenAIAPIName = "chat-completions"
 )
 
-// GitHubConfig holds App-based authentication settings. All three fields are
-// required for any repo not in dry-run mode.
+// GitHubConfig holds App-based authentication settings. All three resolved
+// fields (AppID, InstallationID, PrivateKeyPath) are required for any repo
+// not in dry-run mode. Supply values directly or via env-var lookups:
+//
+//	github:
+//	  app_id_env: BURNDOWN_BOT_APP_ID
+//	  installation_id_env: BURNDOWN_BOT_INSTALLATION_ID
+//	  private_key_path: ~/.burndown/burndown-bot.pem
+//	  # or supply the PEM content via env var; loader writes it to a temp file:
+//	  private_key_env: BURNDOWN_BOT_PRIVATE_KEY
 type GitHubConfig struct {
 	AppID          int64  `yaml:"app_id"`
 	InstallationID int64  `yaml:"installation_id"`
 	PrivateKeyPath string `yaml:"private_key_path"`
+
+	// Env-var alternatives; resolved during Load and merged into the above fields.
+	AppIDEnv          string `yaml:"app_id_env,omitempty"`
+	InstallationIDEnv string `yaml:"installation_id_env,omitempty"`
+	PrivateKeyEnv     string `yaml:"private_key_env,omitempty"`
 }
 
 // PathsConfig is where on disk burndown writes state, audit, logs, etc.
@@ -341,8 +368,50 @@ func parseNoValidate(data []byte) (*Config, error) {
 	if err := c.expandPaths(); err != nil {
 		return nil, err
 	}
+	if err := c.resolveGitHubEnvVars(); err != nil {
+		return nil, err
+	}
 	c.applyDefaults()
 	return &c, nil
+}
+
+// resolveGitHubEnvVars merges env-var alternatives into the GitHubConfig
+// integer/path fields. This supports GitHub Actions secrets without requiring
+// the caller to write secret values into the YAML file.
+func (c *Config) resolveGitHubEnvVars() error {
+	gh := &c.GitHub
+	if gh.AppIDEnv != "" && gh.AppID == 0 {
+		raw := os.Getenv(gh.AppIDEnv)
+		if raw != "" {
+			id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+			if err != nil {
+				return fmt.Errorf("config: github.app_id_env %q: %w", gh.AppIDEnv, err)
+			}
+			gh.AppID = id
+		}
+	}
+	if gh.InstallationIDEnv != "" && gh.InstallationID == 0 {
+		raw := os.Getenv(gh.InstallationIDEnv)
+		if raw != "" {
+			id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+			if err != nil {
+				return fmt.Errorf("config: github.installation_id_env %q: %w", gh.InstallationIDEnv, err)
+			}
+			gh.InstallationID = id
+		}
+	}
+	if gh.PrivateKeyEnv != "" && gh.PrivateKeyPath == "" {
+		pem := os.Getenv(gh.PrivateKeyEnv)
+		if pem != "" {
+			home, _ := os.UserHomeDir()
+			keyPath := filepath.Join(home, ".burndown", "burndown-bot.pem")
+			if err := os.WriteFile(keyPath, []byte(pem), 0600); err != nil {
+				return fmt.Errorf("config: writing private_key_env to %s: %w", keyPath, err)
+			}
+			gh.PrivateKeyPath = keyPath
+		}
+	}
+	return nil
 }
 
 // LoadNoValidate reads a config file and applies defaults but skips the
