@@ -100,6 +100,12 @@ func (t *AnthropicTriager) Triage(ctx context.Context, tasks []sources.Task) ([]
 
 	if t.thinkingBudget >= 1024 {
 		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(t.thinkingBudget)
+		// Anthropic rejects tool_choice=forced when thinking is enabled.
+		// Switch to auto — the system prompt instructs the model to call
+		// record_classifications; extractAnthropicDecisions validates it did.
+		params.ToolChoice = anthropic.ToolChoiceUnionParam{
+			OfAuto: &anthropic.ToolChoiceAutoParam{},
+		}
 	}
 
 	resp, err := t.client.Messages.New(ctx, params)
