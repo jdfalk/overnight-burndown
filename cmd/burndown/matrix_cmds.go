@@ -1,5 +1,5 @@
 // file: cmd/burndown/matrix_cmds.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b9c0d1e-2f3a-4b5c-9d6e-7f8a9b0c1d2e
 //
 // Matrix-mode subcommands: triage, dispatch-one, aggregate.
@@ -33,6 +33,7 @@ func cmdTriage(args []string) int {
 	configPath := fs.String("config", defaultConfigPath(), "path to config.yaml")
 	outPath := fs.String("out", "", "write triage result JSON here (required)")
 	dryRun := fs.Bool("dry-run", false, "force dry-run mode for every repo")
+	fromEnv := fs.Bool("from-env", false, "build config from environment variables instead of --config file")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -41,7 +42,18 @@ func cmdTriage(args []string) int {
 		return 2
 	}
 
-	r, err := buildRunnerFromConfig(*configPath, *dryRun)
+	var r *runner.Runner
+	var err error
+	if *fromEnv {
+		cfg, cfgErr := config.FromEnv()
+		if cfgErr != nil {
+			fmt.Fprintln(os.Stderr, "burndown triage:", cfgErr)
+			return 1
+		}
+		r, err = buildRunnerFromCfg(cfg, *dryRun)
+	} else {
+		r, err = buildRunnerFromConfig(*configPath, *dryRun)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "burndown triage:", err)
 		return 1
@@ -85,6 +97,7 @@ func cmdDispatchOne(args []string) int {
 	taskIndex := fs.Int("task-index", -1, "0-based index into TriageResult.Tasks (required)")
 	outPath := fs.String("out", "", "write outcome JSON here (required)")
 	branchSuffix := fs.String("branch-suffix", "", "appended to SuggestedBranch (e.g. 'openai', 'claude') to prevent branch collisions when comparing providers on the same tasks")
+	fromEnv := fs.Bool("from-env", false, "build config from environment variables instead of --config file")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -117,7 +130,17 @@ func cmdDispatchOne(args []string) int {
 		mt.Item.Decision.SuggestedBranch += "--" + *branchSuffix
 	}
 
-	r, err := buildRunnerForDispatch(*configPath)
+	var r *runner.Runner
+	if *fromEnv {
+		cfg, cfgErr := config.FromEnv()
+		if cfgErr != nil {
+			fmt.Fprintln(os.Stderr, "burndown dispatch-one:", cfgErr)
+			return 1
+		}
+		r, err = buildRunnerForDispatchCfg(cfg)
+	} else {
+		r, err = buildRunnerForDispatch(*configPath)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "burndown dispatch-one:", err)
 		return 1
@@ -176,6 +199,7 @@ func cmdAggregate(args []string) int {
 	triageFile := fs.String("triage-file", "", "path to the triage result JSON (required, for dry-run outcomes)")
 	outcomesDir := fs.String("outcomes-dir", "", "directory containing dispatch-one outcome JSONs (required)")
 	digestOut := fs.String("digest-out", "", "write rendered digest markdown here (required)")
+	fromEnv := fs.Bool("from-env", false, "build config from environment variables instead of --config file")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -214,7 +238,17 @@ func cmdAggregate(args []string) int {
 		outcomes = append(outcomes, *oc)
 	}
 
-	r, err := buildRunnerForAggregate(*configPath)
+	var r *runner.Runner
+	if *fromEnv {
+		cfg, cfgErr := config.FromEnvNoValidate()
+		if cfgErr != nil {
+			fmt.Fprintln(os.Stderr, "burndown aggregate:", cfgErr)
+			return 1
+		}
+		r, err = buildRunnerForAggregateCfg(cfg)
+	} else {
+		r, err = buildRunnerForAggregate(*configPath)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "burndown aggregate:", err)
 		return 1
@@ -266,6 +300,68 @@ func cmdAggregate(args []string) int {
 // run on a host that doesn't have the source repos checked out.
 func buildRunnerFromConfig(configPath string, dryRun bool) (*runner.Runner, error) {
 	return buildRunner(configPath, dryRun, true)
+}
+
+// buildRunnerFromCfg is the --from-env equivalent of buildRunnerFromConfig.
+func buildRunnerFromCfg(cfg *config.Config, dryRun bool) (*runner.Runner, error) {
+	if dryRun {
+		for i := range cfg.Repos {
+			cfg.Repos[i].Mode = config.ModeDryRun
+		}
+	}
+	st, err := state.LoadDir(cfg.Paths.StateDir)
+	if err != nil {
+		return nil, fmt.Errorf("load state: %w", err)
+	}
+	if n := st.MarkStale(state.InFlightTTL, time.Now().UTC()); n > 0 {
+		fmt.Fprintf(os.Stderr, "burndown: expired %d stale in-flight task(s) (TTL=%v)\n", n, state.InFlightTTL)
+	}
+	providers, err := buildProviderClients(cfg)
+	if err != nil {
+		return nil, err
+	}
+	runAgent, err := pickRunAgent(cfg, providers)
+	if err != nil {
+		return nil, err
+	}
+	return &runner.Runner{
+		Config:    *cfg,
+		State:     st,
+		Anthropic: providers.anthropic,
+		SpawnMCP:  defaultSpawnMCP(cfg),
+		RunAgent:  runAgent,
+	}, nil
+}
+
+// buildRunnerForDispatchCfg is the --from-env equivalent of buildRunnerForDispatch.
+func buildRunnerForDispatchCfg(cfg *config.Config) (*runner.Runner, error) {
+	st, err := state.LoadDir(cfg.Paths.StateDir)
+	if err != nil {
+		return nil, fmt.Errorf("load state: %w", err)
+	}
+	if n := st.MarkStale(state.InFlightTTL, time.Now().UTC()); n > 0 {
+		fmt.Fprintf(os.Stderr, "burndown: expired %d stale in-flight task(s) (TTL=%v)\n", n, state.InFlightTTL)
+	}
+	providers, err := buildProviderClientsForDispatch(cfg)
+	if err != nil {
+		return nil, err
+	}
+	runAgent, err := pickRunAgent(cfg, providers)
+	if err != nil {
+		return nil, err
+	}
+	return &runner.Runner{
+		Config:    *cfg,
+		State:     st,
+		Anthropic: providers.anthropic,
+		SpawnMCP:  defaultSpawnMCP(cfg),
+		RunAgent:  runAgent,
+	}, nil
+}
+
+// buildRunnerForAggregateCfg is the --from-env equivalent of buildRunnerForAggregate.
+func buildRunnerForAggregateCfg(cfg *config.Config) (*runner.Runner, error) {
+	return &runner.Runner{Config: *cfg}, nil
 }
 
 func buildRunnerNoValidate(configPath string, dryRun bool) (*runner.Runner, error) {
