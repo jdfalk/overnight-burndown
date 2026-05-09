@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/render-ci-config.py
-# version: 1.3.0
+# version: 1.4.0
 """Emit a burndown config.yaml from environment variables.
 
 Replaces a fragile nested-bash-heredoc rendering step. All inputs come
@@ -13,8 +13,15 @@ Required env:
   RUNNER_TEMP       - GitHub Actions runner temp dir (for state/digest paths)
 
 Optional env:
+  REPO_NAME         - target repo name (default: audiobook-organizer)
+  REPO_OWNER        - target repo owner (default: jdfalk)
+
   IMPLEMENTER_PROVIDER  - openai | anthropic  (default: openai)
                           Controls which LLM backend runs the agent loop.
+
+  TRIAGE_PROVIDER   - openai | anthropic  (default: openai)
+                      When anthropic, triage uses claude-opus-4-7 with
+                      extended thinking (8000 budget tokens).
 
   CHEAPEST_ONLY     - 1 | true | yes  (default: false)
                       When set, emits only the cheapest single model for the
@@ -45,7 +52,10 @@ def render() -> str:
     mode = os.environ["MODE"]
     workspace = os.environ["WORKSPACE"]
     tmp = os.environ["RUNNER_TEMP"]
+    repo_name = os.environ.get("REPO_NAME", "audiobook-organizer").strip()
+    repo_owner = os.environ.get("REPO_OWNER", "jdfalk").strip()
     provider = os.environ.get("IMPLEMENTER_PROVIDER", "openai").strip().lower()
+    triage_provider = os.environ.get("TRIAGE_PROVIDER", "openai").strip().lower()
     cheapest_only = os.environ.get("CHEAPEST_ONLY", "").strip().lower() in ("1", "true", "yes")
     powerful_only = os.environ.get("POWERFUL_ONLY", "").strip().lower() in ("1", "true", "yes")
     if powerful_only:
@@ -59,29 +69,32 @@ def render() -> str:
     sections: list[str] = []
 
     # ------------------------------------------------------------------
-    # Provider credentials — triage always uses OpenAI, so the openai
-    # section is always required. Anthropic section is added when the
-    # implementer is anthropic. config.Validate checks that api_key_env
-    # is non-empty (config structure only); the env vars themselves are
-    # only read at runtime by the provider that is actually called.
+    # Provider credentials. Include whichever providers are needed.
     # ------------------------------------------------------------------
-    sections.append("""\
+    if triage_provider == "openai" or provider == "openai":
+        sections.append("""\
 openai:
   api_key_env: OPENAI_API_KEY
 """)
-    if provider == "anthropic":
+    if triage_provider == "anthropic" or provider == "anthropic":
         sections.append("""\
 anthropic:
   api_key_env: ANTHROPIC_API_KEY
 """)
 
     # ------------------------------------------------------------------
-    # Triage — always on OpenAI (gpt-5-mini is cheap + fast for metadata
-    # classification).  When the whole run is on Anthropic, triage could
-    # move to Claude; flip to provider: anthropic + model: claude-haiku-*
-    # once Claude API credits are available.
+    # Triage — OpenAI by default (fast + cheap); Anthropic when
+    # TRIAGE_PROVIDER=anthropic (uses Opus with extended thinking).
     # ------------------------------------------------------------------
-    sections.append("""\
+    if triage_provider == "anthropic":
+        sections.append("""\
+triage:
+  provider: anthropic
+  model: claude-opus-4-7
+  thinking_budget_tokens: 8000
+""")
+    else:
+        sections.append("""\
 triage:
   provider: openai
   model: gpt-5-mini
@@ -189,18 +202,22 @@ github:
   private_key_path: {pem_path}
 """)
 
-    sections.append(f"""\
+    repo_section = f"""\
 repos:
-  - name: audiobook-organizer
-    owner: jdfalk
-    local_path: {workspace}/targets/audiobook-organizer
+  - name: {repo_name}
+    owner: {repo_owner}
+    local_path: {workspace}/targets/{repo_name}
     mode: {mode}
+"""
+    if repo_name == "audiobook-organizer":
+        repo_section += """\
     # Exclude heavy fixtures from per-task worktrees so 15 parallel worktrees
     # fit on a stock GitHub Actions runner (14 GB ephemeral disk). Without
     # this, ~1.4 GB of LibriVox audio per worktree ENOSPCs around task 5.
     worktree_exclude_paths:
       - testdata/audio
-""")
+"""
+    sections.append(repo_section)
 
     return "\n".join(sections)
 
