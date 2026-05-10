@@ -173,6 +173,11 @@ func fromEnvCore() (*Config, error) {
 	}
 	cfg.Repos = []RepoConfig{repo}
 
+	cfg.TaskHub = TaskHubConfig{
+		Repo:        envOrDefault("HUB_REPO", "jdfalk/burndown-tasks"),
+		LabelPrefix: envOrDefault("LABEL_PREFIX", "repo:"),
+	}
+
 	if err := cfg.resolveGitHubEnvVars(); err != nil {
 		return nil, err
 	}

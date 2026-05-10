@@ -47,6 +47,8 @@ func main() {
 			os.Exit(cmdDispatchOne(os.Args[2:]))
 		case "aggregate":
 			os.Exit(cmdAggregate(os.Args[2:]))
+		case "triage-poll":
+			os.Exit(cmdTriagePoll(os.Args[2:]))
 		case "--help", "-h", "help":
 			printHelp()
 			return
@@ -73,6 +75,7 @@ func printHelp() {
 	fmt.Fprintln(os.Stderr, "  triage          Matrix mode: emit task JSON for fan-out")
 	fmt.Fprintln(os.Stderr, "  dispatch-one    Matrix mode: dispatch one task from triage JSON")
 	fmt.Fprintln(os.Stderr, "  aggregate       Matrix mode: combine outcomes into a digest")
+	fmt.Fprintln(os.Stderr, "  triage-poll     30-min cron: submit/poll OpenAI batch triage for hub issues")
 	fmt.Fprintln(os.Stderr, "  --version, -v   Print version and exit")
 	fmt.Fprintln(os.Stderr, "  --help, -h      Show this help")
 	fmt.Fprintln(os.Stderr, "")
