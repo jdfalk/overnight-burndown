@@ -1,5 +1,5 @@
 // file: internal/triagepoll/batch.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b6c7d8e-9f0a-1b2c-3d4e-5f6a7b8c9d0e
 //
 // OpenAI Batch API operations for async triage. The batch API gives a 50%
@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -210,7 +211,14 @@ func PollBatch(ctx context.Context, apiKey, batchID string) (BatchStatus, *Batch
 	}
 
 	if batch.OutputFileID == "" {
-		return BatchStatusFailed, nil, fmt.Errorf("triagepoll: batch %s completed but has no output_file_id", batchID)
+		// Batch completed but produced no output (all requests failed internally).
+		// Treat as a soft failure so the state machine closes the tracking issue
+		// rather than propagating a hard error that fails the CI job.
+		slog.WarnContext(ctx, "triagepoll: batch completed with no output_file_id, treating as failed",
+			"batch_id", batchID,
+			"request_counts_failed", batch.RequestCounts.Failed,
+			"request_counts_total", batch.RequestCounts.Total)
+		return BatchStatusFailed, nil, nil
 	}
 
 	result, err := downloadAndParse(ctx, cl, batch.OutputFileID, int(batch.RequestCounts.Failed))
