@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/packages/param"
-	"github.com/openai/openai-go/responses"
-	"github.com/openai/openai-go/shared"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/jdfalk/overnight-burndown/internal/sources"
 )
@@ -109,7 +109,7 @@ func extractOpenAIDecisions(resp *responses.Response) ([]Decision, error) {
 		var payload struct {
 			Decisions []Decision `json:"decisions"`
 		}
-		if err := json.Unmarshal([]byte(item.Arguments), &payload); err != nil {
+		if err := json.Unmarshal([]byte(item.Arguments.OfString), &payload); err != nil {
 			return nil, fmt.Errorf("decode tool args: %w", err)
 		}
 		return payload.Decisions, nil

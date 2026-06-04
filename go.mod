@@ -8,7 +8,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.38.0
 	github.com/bradleyfalzon/ghinstallation/v2 v2.18.0
 	github.com/google/go-github/v84 v84.0.0
-	github.com/openai/openai-go v1.12.0
+	github.com/openai/openai-go/v3 v3.39.0
 	golang.org/x/sync v0.16.0
 	golang.org/x/sys v0.43.0
 	gopkg.in/yaml.v3 v3.0.1

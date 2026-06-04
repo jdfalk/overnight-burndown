@@ -21,8 +21,8 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/openai/openai-go"
-	openaiOption "github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/v3"
+	openaiOption "github.com/openai/openai-go/v3/option"
 
 	"github.com/jdfalk/overnight-burndown/internal/agent"
 	"github.com/jdfalk/overnight-burndown/internal/config"

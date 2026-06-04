@@ -1,5 +1,5 @@
 // file: internal/agent/openai_responses.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
 //
 // OpenAI Responses API implementer agent. Counterpart to RunOpenAI in
@@ -39,10 +39,10 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/packages/param"
-	"github.com/openai/openai-go/responses"
-	"github.com/openai/openai-go/shared"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/jdfalk/overnight-burndown/internal/mcp"
 )
@@ -92,6 +92,14 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, models []stri
 	var prevID string
 	modelIdx := 0 // points into models; advances on retry-budget exhaustion
 
+	// compactThresholdTokens: compact the server-side conversation once
+	// cumulative input tokens cross this threshold. Chosen to leave ~50K of
+	// headroom below the model's 128K context window. After compaction, the
+	// running token counter resets so we compact again if the new thread
+	// grows large too.
+	const compactThresholdTokens = 80_000
+	var tokensSinceLastCompact int64
+
 	for i := 0; i < opts.MaxIterations; i++ {
 		res.Iterations = i + 1
 
@@ -129,10 +137,34 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, models []stri
 			TotalTokens:      resp.Usage.TotalTokens,
 		}
 		res.Usage.Add(iterUsage)
-		fmt.Fprintf(stderr, "[agent] iter=%d model=%s prompt=%d cached=%d out=%d cumulative_tools=%d\n",
+		tokensSinceLastCompact += resp.Usage.InputTokens
+		fmt.Fprintf(stderr, "[agent] iter=%d model=%s prompt=%d cached=%d out=%d cumulative_tools=%d tokens_since_compact=%d\n",
 			res.Iterations, models[modelIdx],
 			iterUsage.PromptTokens, iterUsage.CachedTokens, iterUsage.CompletionTokens,
-			res.ToolCallCount)
+			res.ToolCallCount, tokensSinceLastCompact)
+
+		// Proactive compaction: compress the server-side conversation before
+		// the context window fills. We compact once input tokens since the
+		// last compact cross 80K, then reset the counter so we'll compact
+		// again if the refreshed thread grows large too.
+		if prevID != "" && tokensSinceLastCompact >= compactThresholdTokens {
+			fmt.Fprintf(stderr, "[agent] iter=%d compacting conversation (tokens_since_compact=%d)\n",
+				res.Iterations, tokensSinceLastCompact)
+			compacted, cerr := client.Responses.Compact(ctx, responses.ResponseCompactParams{
+				Model:              responses.ResponseCompactParamsModel(models[modelIdx]),
+				PreviousResponseID: openai.String(prevID),
+			})
+			if cerr != nil {
+				// Compaction failure is non-fatal: log and continue with the
+				// existing prevID. The run may still hit context_length_exceeded
+				// but at least we tried.
+				fmt.Fprintf(stderr, "::warning::agent: compaction failed (iter %d): %v\n", res.Iterations, cerr)
+			} else {
+				prevID = compacted.ID
+				tokensSinceLastCompact = 0
+				fmt.Fprintf(stderr, "[agent] iter=%d compacted → new prevID=%s\n", res.Iterations, prevID)
+			}
+		}
 
 		// Walk the output items: capture text into res.Summary, collect
 		// any function_call items for execution, surface stop reason.
@@ -151,7 +183,7 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, models []stri
 				toolCalls = append(toolCalls, responsesToolCall{
 					CallID:    item.CallID,
 					Name:      item.Name,
-					Arguments: item.Arguments,
+					Arguments: item.Arguments.OfString,
 				})
 			}
 		}

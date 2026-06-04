@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/shared"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/jdfalk/overnight-burndown/internal/mcp"
 )
@@ -176,11 +176,12 @@ func RunOpenAI(ctx context.Context, client openai.Client, model string, opts Opt
 		// Execute each tool call and append a tool message per call.
 		for _, tc := range msg.ToolCalls {
 			res.ToolCallCount++
+			fn := tc.AsFunction()
 			content := executeOpenAIToolCall(ctx, opts.MCP, tc)
-			if tc.Function.Name == "report_status" {
-				captureReportStatus(res, tc.Function.Arguments)
+			if fn.Function.Name == "report_status" {
+				captureReportStatus(res, fn.Function.Arguments)
 			}
-			messages = append(messages, openai.ToolMessage(content, tc.ID))
+			messages = append(messages, openai.ToolMessage(content, fn.ID))
 		}
 	}
 
@@ -189,7 +190,7 @@ func RunOpenAI(ctx context.Context, client openai.Client, model string, opts Opt
 
 // buildOpenAIToolList fetches the MCP catalog, filters to the allowlist,
 // converts each survivor to an OpenAI ChatCompletionToolParam.
-func buildOpenAIToolList(ctx context.Context, m MCPClient, allowed []string) ([]openai.ChatCompletionToolParam, error) {
+func buildOpenAIToolList(ctx context.Context, m MCPClient, allowed []string) ([]openai.ChatCompletionToolUnionParam, error) {
 	allowSet := make(map[string]struct{}, len(allowed))
 	for _, name := range allowed {
 		allowSet[name] = struct{}{}
@@ -200,7 +201,7 @@ func buildOpenAIToolList(ctx context.Context, m MCPClient, allowed []string) ([]
 		return nil, err
 	}
 
-	var out []openai.ChatCompletionToolParam
+	var out []openai.ChatCompletionToolUnionParam
 	for _, t := range mcpTools {
 		if _, ok := allowSet[t.Name]; !ok {
 			continue
@@ -213,32 +214,31 @@ func buildOpenAIToolList(ctx context.Context, m MCPClient, allowed []string) ([]
 // mcpToOpenAI converts an MCP ToolDef to an OpenAI tool param. MCP's
 // inputSchema is a full JSON Schema; OpenAI's Parameters field accepts
 // the same shape so we pass it through unchanged.
-func mcpToOpenAI(t mcp.ToolDef) openai.ChatCompletionToolParam {
+func mcpToOpenAI(t mcp.ToolDef) openai.ChatCompletionToolUnionParam {
 	schema := t.InputSchema
 	if schema == nil {
 		schema = map[string]any{"type": "object", "properties": map[string]any{}}
 	}
-	return openai.ChatCompletionToolParam{
-		Function: shared.FunctionDefinitionParam{
-			Name:        t.Name,
-			Description: openai.String(t.Description),
-			Parameters:  schema,
-		},
-	}
+	return openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+		Name:        t.Name,
+		Description: openai.String(t.Description),
+		Parameters:  schema,
+	})
 }
 
 // executeOpenAIToolCall forwards one tool call to MCP and returns the
 // content string for the tool message. Tool errors / bad JSON inputs are
 // surfaced as text content (not loop-aborting errors) so the agent can
 // recover.
-func executeOpenAIToolCall(ctx context.Context, m MCPClient, tc openai.ChatCompletionMessageToolCall) string {
+func executeOpenAIToolCall(ctx context.Context, m MCPClient, tc openai.ChatCompletionMessageToolCallUnion) string {
+	fn := tc.AsFunction()
 	var args map[string]any
-	if tc.Function.Arguments != "" {
-		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+	if fn.Function.Arguments != "" {
+		if err := json.Unmarshal([]byte(fn.Function.Arguments), &args); err != nil {
 			return fmt.Sprintf("agent: invalid tool input json: %v", err)
 		}
 	}
-	callRes, err := m.CallTool(ctx, tc.Function.Name, args)
+	callRes, err := m.CallTool(ctx, fn.Function.Name, args)
 	if err != nil {
 		return fmt.Sprintf("tool error: %v", err)
 	}

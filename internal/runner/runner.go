@@ -40,7 +40,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	openaiOption "github.com/openai/openai-go/option"
+	openaiOption "github.com/openai/openai-go/v3/option"
 	"github.com/google/go-github/v84/github"
 
 	"github.com/jdfalk/overnight-burndown/internal/auth"
