@@ -119,12 +119,14 @@ Respond with JSON only.`
 // responsesAPIBatchBody is the Responses API request body for the batch JSONL.
 // Uses input+instructions+text.format instead of messages+response_format.
 type responsesAPIBatchBody struct {
-	Model           string              `json:"model"`
-	Input           string              `json:"input"`
-	Instructions    string              `json:"instructions"`
+	Model           string            `json:"model"`
+	Input           string            `json:"input"`
+	Instructions    string            `json:"instructions"`
 	Text            responsesTextConfig `json:"text"`
-	MaxOutputTokens int                 `json:"max_output_tokens"`
-	Store           bool                `json:"store"`
+	MaxOutputTokens int               `json:"max_output_tokens"`
+	Store           bool              `json:"store"`
+	User            string            `json:"user,omitempty"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
 }
 
 type responsesTextConfig struct {
@@ -190,6 +192,11 @@ func SubmitBatch(ctx context.Context, apiKey, model string, issues []HubIssue) (
 				},
 				MaxOutputTokens: 512,
 				Store:           false,
+				User:            "ao-triage-poll",
+				Metadata: map[string]string{
+					"service":      "ao-triage-poll",
+					"issue_number": fmt.Sprintf("%d", iss.Number),
+				},
 			},
 		}
 

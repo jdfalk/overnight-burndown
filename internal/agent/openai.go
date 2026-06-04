@@ -138,6 +138,7 @@ func RunOpenAI(ctx context.Context, client openai.Client, model string, opts Opt
 			Model:    openai.ChatModel(model),
 			Messages: messages,
 			Tools:    tools,
+			User:     openai.String("ao-dispatch"),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("agent: openai call (iter %d): %w", res.Iterations, err)
