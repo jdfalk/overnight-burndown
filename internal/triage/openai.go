@@ -75,6 +75,11 @@ func (t *OpenAITriager) Triage(ctx context.Context, tasks []sources.Task) ([]Dec
 		// Triage is one-shot — no follow-up call references this response,
 		// so don't waste server-side storage on it.
 		Store: param.NewOpt(false),
+		User: openai.String("ao-triage"),
+		Metadata: shared.Metadata{
+			"service":    "ao-triage",
+			"task_count": fmt.Sprintf("%d", len(tasks)),
+		},
 	}
 
 	resp, err := t.client.Responses.New(ctx, params)

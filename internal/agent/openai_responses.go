@@ -1,5 +1,5 @@
 // file: internal/agent/openai_responses.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
 //
 // OpenAI Responses API implementer agent. Counterpart to RunOpenAI in
@@ -105,6 +105,18 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, models []stri
 			// PreviousResponseID work — explicit Store: true so a future
 			// reader doesn't wonder.
 			Store: param.NewOpt(true),
+			// User identifies the caller in the OpenAI usage dashboard.
+			// User shows up in the OpenAI usage dashboard, filterable by caller.
+			User: openai.String("ao-dispatch"),
+			// Metadata is stored on the response object for per-task filtering
+			// in the API usage logs (platform.openai.com → Logs).
+			Metadata: shared.Metadata{
+				"service":        "ao-dispatch",
+				"repo":           opts.Task.Source.Repo,
+				"classification": string(opts.Decision.Classification),
+				"complexity":     fmt.Sprintf("%d", opts.Decision.EstComplexity),
+				"branch":         opts.Branch,
+			},
 		}
 		if prevID != "" {
 			params.PreviousResponseID = openai.String(prevID)
