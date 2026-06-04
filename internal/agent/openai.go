@@ -111,7 +111,7 @@ func parseRetryAfter(s string) time.Duration {
 // loop terminations.
 func RunOpenAI(ctx context.Context, client openai.Client, model string, opts Options) (*Result, error) {
 	if opts.MaxIterations <= 0 {
-		opts.MaxIterations = 30
+		opts.MaxIterations = 60
 	}
 	if len(opts.AllowedTools) == 0 {
 		opts.AllowedTools = defaultAllowedTools

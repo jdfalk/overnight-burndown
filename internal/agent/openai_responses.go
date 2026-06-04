@@ -66,7 +66,7 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, models []stri
 		return nil, errors.New("agent: RunOpenAIResponses requires at least one model")
 	}
 	if opts.MaxIterations <= 0 {
-		opts.MaxIterations = 30
+		opts.MaxIterations = 60
 	}
 	if len(opts.AllowedTools) == 0 {
 		opts.AllowedTools = defaultAllowedTools
