@@ -120,6 +120,10 @@ type Config struct {
 	Concurrency ConcurrencyConfig  `yaml:"concurrency"`
 	Defaults    Defaults           `yaml:"defaults"`
 	Repos       []RepoConfig       `yaml:"repos"`
+	// TaskFilter selects which subset of TODO tasks to collect.
+	// "failed-batch" picks up [failed-batch]-tagged items for the hard run.
+	// Empty (default) = normal nightly collection.
+	TaskFilter string             `yaml:"task_filter"`
 }
 
 // TaskHubConfig identifies a central GitHub repository that holds task specs

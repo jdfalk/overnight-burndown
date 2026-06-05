@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -173,6 +174,9 @@ func (r *Runner) DispatchOne(ctx context.Context, mt MatrixTask) (*dispatch.Outc
 	// In-flight = agent finished; run ghops next. Anything else means
 	// the agent failed and there's nothing to publish.
 	if oc.Status != state.StatusInFlight {
+		if oc.Status == state.StatusFailed && mt.Item.Task.Source.Type == state.SourceTODO {
+			markFailedBatchInTODO(repoCfg.LocalPath, mt.Item.Task.Source.Title)
+		}
 		return oc, nil
 	}
 
@@ -182,6 +186,9 @@ func (r *Runner) DispatchOne(ctx context.Context, mt MatrixTask) (*dispatch.Outc
 	if err := r.publishOutcome(ctx, pub, repoCfg, oc, prs, merged); err != nil {
 		oc.Status = state.StatusFailed
 		oc.Error = err.Error()
+		if mt.Item.Task.Source.Type == state.SourceTODO {
+			markFailedBatchInTODO(repoCfg.LocalPath, mt.Item.Task.Source.Title)
+		}
 	}
 	return oc, nil
 }
@@ -235,6 +242,54 @@ func (r *Runner) AggregateDigest(ai AggregateInputs) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// markFailedBatchInTODO edits TODO.md in-place, upgrading the failure marker
+// on the line whose text contains the task title. Non-fatal on any error —
+// the dispatch outcome is already recorded; the marker is best-effort.
+//
+// Marker transitions:
+//
+//	(none)             → [failed-batch]
+//	[failed-batch]     → [failed-batch-hard]
+//	[failed-batch-hard]→ no-op
+func markFailedBatchInTODO(repoLocalPath, taskTitle string) {
+	path := filepath.Join(repoLocalPath, "TODO.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "burndown: markFailedBatch: read %s: %v\n", path, err)
+		return
+	}
+	lines := strings.Split(string(data), "\n")
+	titleLower := strings.ToLower(taskTitle)
+	changed := false
+	for i, line := range lines {
+		if !sources.IsUncheckedItem(line) {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(line), titleLower[:min(len(titleLower), 40)]) {
+			continue
+		}
+		updated := sources.AddFailedBatchMarker(line)
+		if updated != line {
+			lines[i] = updated
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "burndown: markFailedBatch: write %s: %v\n", path, err)
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // buildGitHubClient is a small helper extracted so Triage and DispatchOne

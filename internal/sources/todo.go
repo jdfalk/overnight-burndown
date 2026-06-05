@@ -19,6 +19,18 @@ import (
 // mess of MustCompile calls. The compile-time guarantee is the same.
 func regexpMustCompile(pattern string) *regexp.Regexp { return regexp.MustCompile(pattern) }
 
+// TaskFilter controls which subset of TODO items the collector emits.
+type TaskFilter int
+
+const (
+	// FilterNormal (default): emit items without [hold] or [failed-batch].
+	// This is the nightly run — only fresh tasks.
+	FilterNormal TaskFilter = iota
+	// FilterFailedBatch: emit only items tagged [failed-batch] (but not
+	// [failed-batch-hard]). This is the weekly hard run.
+	FilterFailedBatch
+)
+
 // TODOCollector reads a repo's TODO.md and emits one Task per unchecked
 // markdown task list item.
 //
@@ -34,6 +46,8 @@ func regexpMustCompile(pattern string) *regexp.Regexp { return regexp.MustCompil
 type TODOCollector struct {
 	// Filename overrides the default "TODO.md". Tests use this.
 	Filename string
+	// Filter selects which task subset to collect (default: FilterNormal).
+	Filter TaskFilter
 }
 
 // NewTODOCollector returns a TODOCollector for the conventional TODO.md path.
@@ -98,12 +112,22 @@ func (c *TODOCollector) Collect(_ context.Context, repo string, localPath string
 		line := sc.Text()
 		if isUncheckedItem(line) {
 			flush() // close any in-flight task
-			// `[hold]` anywhere in the line excludes the item entirely. Used for
-			// spec-pending or under-review tasks that need to stay unchecked but
-			// must not be auto-executed.
-			if HasHoldMarker(line) {
-				current = nil
-				continue
+
+			switch c.Filter {
+			case FilterFailedBatch:
+				// Hard run: only collect items tagged [failed-batch] but not
+				// [failed-batch-hard] (those need manual decomposition).
+				if !HasFailedBatchMarker(line) || HasFailedBatchHardMarker(line) {
+					current = nil
+					continue
+				}
+			default: // FilterNormal
+				// Nightly run: skip anything held (includes [failed-batch] items
+				// since they always carry [hold] too).
+				if HasHoldMarker(line) {
+					current = nil
+					continue
+				}
 			}
 			title := stripChecklistPrefix(strings.ToLower(line))
 			title = stripAutoOK(title)
@@ -154,7 +178,11 @@ func (c *TODOCollector) relativePath(filename string) string {
 	return filename
 }
 
-func isUncheckedItem(line string) bool {
+func isUncheckedItem(line string) bool { return IsUncheckedItem(line) }
+
+// IsUncheckedItem reports whether the line is an unchecked markdown task list
+// item. Exported so external packages (e.g. runner) can use the same check.
+func IsUncheckedItem(line string) bool {
 	return uncheckedItem.MatchString(line)
 }
 

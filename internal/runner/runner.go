@@ -258,8 +258,12 @@ func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t triag
 	} else {
 		issueCollector = sources.NewIssueCollector(ghClient)
 	}
+	todoFilter := sources.FilterNormal
+	if r.Config.TaskFilter == "failed-batch" {
+		todoFilter = sources.FilterFailedBatch
+	}
 	collectors := []sources.Collector{
-		sources.NewTODOCollector(),
+		&sources.TODOCollector{Filter: todoFilter},
 		sources.NewPlanCollector(),
 		issueCollector,
 	}

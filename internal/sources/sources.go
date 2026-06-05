@@ -130,11 +130,13 @@ func stripAutoOK(s string) string {
 }
 
 var (
-	checklistPrefix = regexp.MustCompile(`(?i)^\s*(?:[-*+]|\d+\.)\s*\[\s*[xX ]?\s*\]\s*`)
-	autoOKMarker    = regexp.MustCompile(`(?i)^\s*\[\s*auto-ok\s*\]\s*`)
-	holdMarker      = regexp.MustCompile(`(?i)\[\s*hold\s*\]`)
-	punct           = regexp.MustCompile(`[^\w\s]+`)
-	ws              = regexp.MustCompile(`\s+`)
+	checklistPrefix      = regexp.MustCompile(`(?i)^\s*(?:[-*+]|\d+\.)\s*\[\s*[xX ]?\s*\]\s*`)
+	autoOKMarker         = regexp.MustCompile(`(?i)^\s*\[\s*auto-ok\s*\]\s*`)
+	holdMarker           = regexp.MustCompile(`(?i)\[\s*hold\s*\]`)
+	failedBatchMarker    = regexp.MustCompile(`(?i)\[\s*failed-batch\s*\]`)
+	failedBatchHardMarker = regexp.MustCompile(`(?i)\[\s*failed-batch-hard\s*\]`)
+	punct                = regexp.MustCompile(`[^\w\s]+`)
+	ws                   = regexp.MustCompile(`\s+`)
 )
 
 // HasAutoOKMarker reports whether `[auto-ok]` appears as a leading marker on
@@ -149,4 +151,44 @@ func HasAutoOKMarker(line string) bool {
 // `[ ]` is appropriate but auto-execution is not.
 func HasHoldMarker(line string) bool {
 	return holdMarker.MatchString(line)
+}
+
+// HasFailedBatchMarker reports whether `[failed-batch]` appears in the line.
+// Items with this marker failed the nightly run and are queued for the weekly
+// hard run (bigger model, higher effort).
+func HasFailedBatchMarker(line string) bool {
+	return failedBatchMarker.MatchString(line)
+}
+
+// HasFailedBatchHardMarker reports whether `[failed-batch-hard]` appears in
+// the line. Items with this marker failed both the nightly and hard runs and
+// need manual decomposition before they can be auto-executed.
+func HasFailedBatchHardMarker(line string) bool {
+	return failedBatchHardMarker.MatchString(line)
+}
+
+// AddFailedBatchMarker upgrades the failure marker on a TODO.md line:
+//   - no marker → add [failed-batch]
+//   - [failed-batch] present → replace with [failed-batch-hard]
+//   - [failed-batch-hard] present → no-op (already at max)
+func AddFailedBatchMarker(line string) string {
+	if HasFailedBatchHardMarker(line) {
+		return line
+	}
+	if HasFailedBatchMarker(line) {
+		return failedBatchMarker.ReplaceAllString(line, "[failed-batch-hard]")
+	}
+	// Insert after the checkbox prefix.
+	return checklistPrefix.ReplaceAllStringFunc(line, func(pfx string) string {
+		return pfx + "[failed-batch] "
+	})
+}
+
+// RemoveFailedBatchMarkers strips both [failed-batch] and [failed-batch-hard]
+// from a line (used when a task succeeds in the hard run).
+func RemoveFailedBatchMarkers(line string) string {
+	line = failedBatchHardMarker.ReplaceAllString(line, "")
+	line = failedBatchMarker.ReplaceAllString(line, "")
+	// Collapse any double-spaces left behind.
+	return strings.Join(strings.Fields(line), " ")
 }

@@ -95,6 +95,7 @@ func fromEnvCore() (*Config, error) {
 	triageModel := envOrDefault("TRIAGE_MODEL", "o4-mini")
 	cheapestOnly := isTruthy(os.Getenv("CHEAPEST_ONLY"))
 	powerfulOnly := isTruthy(os.Getenv("POWERFUL_ONLY"))
+	taskFilter := strings.ToLower(strings.TrimSpace(os.Getenv("TASK_FILTER")))
 	if powerfulOnly {
 		cheapestOnly = false
 	}
@@ -177,6 +178,8 @@ func fromEnvCore() (*Config, error) {
 		Repo:        envOrDefault("HUB_REPO", "jdfalk/burndown-tasks"),
 		LabelPrefix: envOrDefault("LABEL_PREFIX", "repo:"),
 	}
+
+	cfg.TaskFilter = taskFilter
 
 	if err := cfg.resolveGitHubEnvVars(); err != nil {
 		return nil, err
