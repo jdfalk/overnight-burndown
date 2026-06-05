@@ -15,10 +15,12 @@ type Worktree struct {
 	Branch string
 }
 
-// AddWorktree creates a worktree at `path` on a new branch `branch`,
-// branched off of the parent repo's HEAD. The parent repo lives at
-// `repoPath`. Returns an error if the branch already exists or the path
-// is already a worktree.
+// AddWorktree creates a worktree at `path` on branch `branch`, branched
+// off of the parent repo's HEAD. The parent repo lives at `repoPath`.
+//
+// If the branch already exists on the remote (a previous interrupted run),
+// it is fetched and the worktree is created from that state so the agent
+// can continue where it left off and the eventual push is fast-forward.
 //
 // We shell out to `git` directly rather than going through safe-ai-util:
 // worktree management is a driver-side concern (the agent never touches
@@ -33,7 +35,18 @@ type Worktree struct {
 // the burndown bot doesn't need. Each entry is interpreted as a directory
 // prefix relative to repo root; leading/trailing "/" are normalized.
 func AddWorktree(ctx context.Context, repoPath, branch, path string, excludePaths ...string) (*Worktree, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "add", "-b", branch, path)
+	var cmd *exec.Cmd
+	if remoteHasBranch(ctx, repoPath, branch) {
+		// Fetch the existing remote branch into a local tracking branch so
+		// the worktree starts from the prior run's state.
+		if out, err := exec.CommandContext(ctx, "git", "-C", repoPath,
+			"fetch", "origin", branch+":"+branch).CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("git fetch existing branch: %w (output: %s)", err, strings.TrimSpace(string(out)))
+		}
+		cmd = exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "add", path, branch)
+	} else {
+		cmd = exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "add", "-b", branch, path)
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("git worktree add: %w (output: %s)", err, strings.TrimSpace(string(out)))
 	}
@@ -88,6 +101,14 @@ func RemoveWorktree(ctx context.Context, repoPath, path string) error {
 		return fmt.Errorf("git worktree remove: %w (output: %s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// remoteHasBranch reports whether `branch` exists on origin without
+// fetching it. Uses ls-remote which is a read-only network call.
+func remoteHasBranch(ctx context.Context, repoPath, branch string) bool {
+	out, err := exec.CommandContext(ctx, "git", "-C", repoPath,
+		"ls-remote", "--heads", "origin", branch).Output()
+	return err == nil && strings.Contains(string(out), "refs/heads/"+branch)
 }
 
 // DeleteBranch deletes a local branch in the parent repo. Used after a

@@ -132,7 +132,55 @@ func TestRemoveWorktree_ForceWorksOnDirtyTree(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Branch already exists → AddWorktree must fail
+// Remote branch exists → AddWorktree upserts (fetches + continues from prior state)
+// ---------------------------------------------------------------------------
+
+func TestAddWorktree_UsesRemoteBranchIfExists(t *testing.T) {
+	// Create a "remote" repo and a "local" clone of it.
+	remote := makeRepo(t)
+	local := t.TempDir()
+	mustGit(t, "", "clone", remote, local)
+	mustGit(t, local, "config", "user.email", "test@example.com")
+	mustGit(t, local, "config", "user.name", "Test")
+
+	// Push a branch with a sentinel file to the remote.
+	remoteBranch := t.TempDir()
+	mustGit(t, remote, "worktree", "add", "-b", "auto/resume", remoteBranch)
+	if err := os.WriteFile(filepath.Join(remoteBranch, "sentinel.txt"), []byte("prior work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, remoteBranch, "add", "sentinel.txt")
+	mustGit(t, remoteBranch, "commit", "-m", "prior work")
+	// The "remote" in this test IS the remote repo, so "origin" in the clone
+	// sees auto/resume as an existing remote branch.
+
+	wtPath := filepath.Join(t.TempDir(), "wt")
+	wt, err := AddWorktree(context.Background(), local, "auto/resume", wtPath)
+	if err != nil {
+		t.Fatalf("AddWorktree with existing remote branch: %v", err)
+	}
+	if wt.Branch != "auto/resume" {
+		t.Fatalf("branch = %q, want auto/resume", wt.Branch)
+	}
+	// The sentinel from the prior run should be present in the new worktree.
+	if _, err := os.Stat(filepath.Join(wtPath, "sentinel.txt")); err != nil {
+		t.Fatalf("sentinel.txt not present in resumed worktree: %v", err)
+	}
+}
+
+func mustGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	fullArgs := args
+	if dir != "" {
+		fullArgs = append([]string{"-C", dir}, args...)
+	}
+	out, err := exec.Command("git", fullArgs...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// Branch already exists locally (no remote) → AddWorktree must fail
 // ---------------------------------------------------------------------------
 
 func TestAddWorktree_RejectsExistingBranch(t *testing.T) {
