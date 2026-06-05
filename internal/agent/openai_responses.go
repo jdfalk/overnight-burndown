@@ -1,5 +1,5 @@
 // file: internal/agent/openai_responses.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
 //
 // OpenAI Responses API implementer agent. Counterpart to RunOpenAI in
@@ -113,6 +113,13 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, models []stri
 			// PreviousResponseID work — explicit Store: true so a future
 			// reader doesn't wonder.
 			Store: param.NewOpt(true),
+			// Cache the system prompt (Instructions) across all tasks in the
+			// same run and across daily runs. Tasks 2–N in a run get a cache
+			// hit on the system prompt; 24h retention means tomorrow's run
+			// hits the cache too. Typical savings: 50–90% on input tokens
+			// that would otherwise be re-sent with every first iteration.
+			PromptCacheKey:       param.NewOpt("ao-burndown-implementer-v1"),
+			PromptCacheRetention: responses.ResponseNewParamsPromptCacheRetention24h,
 			// User identifies the caller in the OpenAI usage dashboard.
 			// User shows up in the OpenAI usage dashboard, filterable by caller.
 			User: openai.String("ao-dispatch"),
@@ -165,6 +172,8 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, models []stri
 			compacted, cerr := client.Responses.Compact(ctx, responses.ResponseCompactParams{
 				Model:              responses.ResponseCompactParamsModel(models[modelIdx]),
 				PreviousResponseID: openai.String(prevID),
+				PromptCacheKey:     param.NewOpt("ao-burndown-implementer-v1"),
+				PromptCacheRetention: responses.ResponseCompactParamsPromptCacheRetention24h,
 			})
 			if cerr != nil {
 				// Compaction failure is non-fatal: log and continue with the
