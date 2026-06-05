@@ -246,6 +246,11 @@ func executeOpenAIToolCall(ctx context.Context, m MCPClient, tc openai.ChatCompl
 	if callRes.IsError {
 		return "tool error: " + callRes.Text
 	}
+	if len(callRes.Text) > maxToolResponseChars {
+		return callRes.Text[:maxToolResponseChars] +
+			fmt.Sprintf("\n\n[truncated: response was %d chars; re-call with narrower args to read more]",
+				len(callRes.Text))
+	}
 	return callRes.Text
 }
 

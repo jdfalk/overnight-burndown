@@ -1,5 +1,5 @@
 // file: internal/agent/openai_responses.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
 //
 // OpenAI Responses API implementer agent. Counterpart to RunOpenAI in
@@ -342,6 +342,12 @@ func mcpToResponses(t mcp.ToolDef) responses.ToolUnionParam {
 	return tool
 }
 
+// maxToolResponseChars caps any single tool output to prevent a large file
+// read from overflowing the model's context window before compaction can
+// help. ~50K chars ≈ 12K tokens at 4 chars/token, leaving ~116K of the
+// 128K window for the rest of the conversation.
+const maxToolResponseChars = 50_000
+
 // executeResponsesToolCall is the Responses-shaped sibling of
 // executeOpenAIToolCall. Same MCP forwarding logic; tool errors come back
 // as text in the function_call_output item rather than aborting the loop.
@@ -358,6 +364,11 @@ func executeResponsesToolCall(ctx context.Context, m MCPClient, tc responsesTool
 	}
 	if callRes.IsError {
 		return "tool error: " + callRes.Text
+	}
+	if len(callRes.Text) > maxToolResponseChars {
+		return callRes.Text[:maxToolResponseChars] +
+			fmt.Sprintf("\n\n[truncated: response was %d chars; re-call with narrower args to read more]",
+				len(callRes.Text))
 	}
 	return callRes.Text
 }
