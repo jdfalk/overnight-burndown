@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"golang.org/x/sync/errgroup"
@@ -95,6 +96,11 @@ type Dispatcher struct {
 	// MaxParallel caps concurrent agents. Defaults to 4 if 0.
 	MaxParallel int
 
+	// LaunchStagger is the delay inserted between goroutine launches to let
+	// the first agent's OpenAI request populate the prompt cache before the
+	// next agent fires. Defaults to 2s. Set to 0 to disable (tests do this).
+	LaunchStagger time.Duration
+
 	// WorktreeExcludePaths are passed to AddWorktree to materialize each
 	// worktree via non-cone sparse-checkout, omitting these directory
 	// prefixes. Empty = full checkout (current behavior).
@@ -132,6 +138,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, items []TaskWithDecision) ([]
 	if max <= 0 {
 		max = 4
 	}
+	stagger := d.LaunchStagger
+	if stagger == 0 {
+		stagger = 2 * time.Second
+	}
 
 	branches := uniqueBranchNames(items)
 	outcomes := make([]Outcome, len(items))
@@ -142,6 +152,17 @@ func (d *Dispatcher) Dispatch(ctx context.Context, items []TaskWithDecision) ([]
 
 	for i := range items {
 		i := i
+		// Stagger launches so each agent's first OpenAI call is separated by
+		// ~stagger duration. This lets the first request populate the shared
+		// prompt cache (ao-burndown-implementer-v1) before the next fires,
+		// turning subsequent cache misses into hits.
+		if i > 0 {
+			select {
+			case <-time.After(stagger):
+			case <-ctx.Done():
+				break
+			}
+		}
 		g.Go(func() error {
 			out := d.runOne(gctx, items[i], branches[i])
 			mu.Lock()

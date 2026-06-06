@@ -1,5 +1,5 @@
 // file: internal/decompose/decompose.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d3c0mp05-e000-4000-a000-f41l3db47ch0
 //
 // Decompose reads [failed-batch-hard]-tagged items from TODO.md and asks
@@ -147,7 +147,7 @@ The parent task:`
 
 func callClaude(ctx context.Context, client anthropic.Client, taskText string) ([]Subtask, error) {
 	msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.ModelClaudeHaiku4_5_20251001,
+		Model:     anthropic.Model(decomposeModel),
 		MaxTokens: 2048,
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(decomposePrompt + "\n\n" + taskText)),
