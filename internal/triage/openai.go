@@ -72,10 +72,17 @@ func (t *OpenAITriager) Triage(ctx context.Context, tasks []sources.Task) ([]Dec
 				Name: "record_classifications",
 			},
 		},
+		// Cache the classification system prompt across daily runs. Triage
+		// runs once per day; 24h retention means tomorrow's run gets a cache
+		// hit on the (large, static) classificationSystemPrompt. The user
+		// payload (task list) is dynamic and goes at the end so it doesn't
+		// bust the cached prefix.
+		PromptCacheKey:       param.NewOpt("ao-burndown-triage-v1"),
+		PromptCacheRetention: responses.ResponseNewParamsPromptCacheRetention24h,
 		// Triage is one-shot — no follow-up call references this response,
 		// so don't waste server-side storage on it.
 		Store: param.NewOpt(false),
-		User: openai.String("ao-triage"),
+		User:  openai.String("ao-triage"),
 		Metadata: shared.Metadata{
 			"service":    "ao-triage",
 			"task_count": fmt.Sprintf("%d", len(tasks)),
