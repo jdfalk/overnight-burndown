@@ -67,6 +67,7 @@ func fixtureDispatcher(t *testing.T, repoPath string,
 		RepoName:        "x",
 		WorktreeRoot:    filepath.Join(t.TempDir(), "worktrees"),
 		MaxParallel:     4,
+		LaunchStagger:   0, // disabled in tests for speed
 		RunAgent:        runAgent,
 		SpawnMCP:        spawnMCP,
 	}
