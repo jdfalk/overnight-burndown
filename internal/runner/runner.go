@@ -32,6 +32,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -307,6 +308,72 @@ func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t triag
 		return out, nil
 	}
 
+	// Build a hub labeler so dispatch can stamp ao: lifecycle labels on issues.
+	hubLabeler, hubLabelErr := ghops.NewHubLabeler(ghClient, r.Config.TaskHub.Repo)
+	if hubLabelErr != nil {
+		slog.WarnContext(ctx, "hub labeler unavailable; issue labels will not be written", "err", hubLabelErr)
+		hubLabeler = nil
+	} else {
+		// Best-effort: create missing labels. Failures are logged, not fatal.
+		if err := hubLabeler.EnsureLabelsExist(ctx); err != nil {
+			slog.WarnContext(ctx, "could not ensure ao: labels exist in hub repo", "err", err)
+		}
+	}
+
+	onTaskStart := func(taskCtx context.Context, issueNum int) error {
+		if hubLabeler == nil {
+			return nil
+		}
+		return hubLabeler.SetRunning(taskCtx, issueNum)
+	}
+	onTaskDone := func(taskCtx context.Context, issueNum int, success bool) error {
+		if hubLabeler == nil {
+			return nil
+		}
+		if success {
+			return hubLabeler.SetCodeComplete(taskCtx, issueNum)
+		}
+		return hubLabeler.SetFailed(taskCtx, issueNum)
+	}
+
+	// Pre-dispatch filter: skip tasks where the issue already has ao:code-complete
+	// (agent finished, PR is open) so we don't re-run a task that already has
+	// working code. Tasks with ao:running but no active job are re-run (crash
+	// recovery). Tasks without issue numbers are always dispatched.
+	if hubLabeler != nil {
+		filtered := items[:0]
+		for _, item := range items {
+			issueNum := dispatch.IssueNumberFromTask(item.Task)
+			if issueNum == 0 {
+				filtered = append(filtered, item)
+				continue
+			}
+			done, err := hubLabeler.HasLabel(ctx, issueNum, ghops.LabelCodeComplete)
+			if err != nil {
+				slog.WarnContext(ctx, "could not check issue label; dispatching anyway",
+					"issue", issueNum, "err", err)
+				filtered = append(filtered, item)
+				continue
+			}
+			if done {
+				slog.InfoContext(ctx, "skipping task: already code-complete", "issue", issueNum)
+				out.Outcomes = append(out.Outcomes, dispatch.Outcome{
+					Task:     item.Task,
+					Decision: item.Decision,
+					Status:   state.StatusDraft, // surfaces in digest as "pending review"
+					Branch:   item.Decision.SuggestedBranch,
+				})
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		items = filtered
+	}
+
+	if len(items) == 0 {
+		return out, nil
+	}
+
 	// Dispatch.
 	d := &dispatch.Dispatcher{
 		AnthropicClient:      r.Anthropic,
@@ -318,6 +385,8 @@ func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t triag
 		WorktreeExcludePaths: repoCfg.WorktreeExcludePaths,
 		RunAgent:             r.RunAgent,
 		SpawnMCP:             r.SpawnMCP,
+		OnTaskStart:          onTaskStart,
+		OnTaskDone:           onTaskDone,
 	}
 	outcomes, err := d.Dispatch(ctx, items)
 	if err != nil {

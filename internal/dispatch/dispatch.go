@@ -31,6 +31,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -110,6 +113,16 @@ type Dispatcher struct {
 	// are wired by NewDispatcher.
 	RunAgent RunAgentFunc
 	SpawnMCP SpawnMCPFunc
+
+	// OnTaskStart is called just before the agent runs for a task. issueNum is
+	// the hub issue number (0 if the task is not issue-backed). Use this to set
+	// the ao:running label. Nil = no-op.
+	OnTaskStart func(ctx context.Context, issueNum int) error
+
+	// OnTaskDone is called after the agent finishes. success=true means the
+	// agent produced a result without error; false means it errored. Use this
+	// to set ao:code-complete or ao:failed. Nil = no-op.
+	OnTaskDone func(ctx context.Context, issueNum int, success bool) error
 }
 
 // Dispatch runs every task in parallel under the configured concurrency
@@ -195,18 +208,23 @@ func (d *Dispatcher) runOne(ctx context.Context, item TaskWithDecision, branch s
 		Status:   state.StatusFailed,
 	}
 
+	issueNum := IssueNumberFromTask(item.Task)
+	d.callOnTaskStart(ctx, issueNum)
+
 	wtPath := WorktreePath(d.WorktreeRoot, d.RepoName, branch)
 	out.WorktreePath = wtPath
 
 	wt, err := AddWorktree(ctx, d.RepoLocalPath, branch, wtPath, d.WorktreeExcludePaths...)
 	if err != nil {
 		out.Error = "create worktree: " + err.Error()
+		d.callOnTaskDone(ctx, issueNum, false)
 		return out
 	}
 
 	mcpClient, mcpClose, err := d.SpawnMCP(ctx, wt.Path)
 	if err != nil {
 		out.Error = "spawn MCP: " + err.Error()
+		d.callOnTaskDone(ctx, issueNum, false)
 		return out
 	}
 	defer func() { _ = mcpClose() }()
@@ -222,6 +240,7 @@ func (d *Dispatcher) runOne(ctx context.Context, item TaskWithDecision, branch s
 	})
 	if err != nil {
 		out.Error = "agent run: " + err.Error()
+		d.callOnTaskDone(ctx, issueNum, false)
 		return out
 	}
 
@@ -229,7 +248,49 @@ func (d *Dispatcher) runOne(ctx context.Context, item TaskWithDecision, branch s
 	out.Model = res.Model
 	out.AttemptedModels = res.AttemptedModels
 	out.Status = state.StatusInFlight // agent finished; PR creation pending in step 9
+	d.callOnTaskDone(ctx, issueNum, true)
 	return out
+}
+
+func (d *Dispatcher) callOnTaskStart(ctx context.Context, issueNum int) {
+	if d.OnTaskStart == nil || issueNum == 0 {
+		return
+	}
+	if err := d.OnTaskStart(ctx, issueNum); err != nil {
+		fmt.Fprintf(os.Stderr, "dispatch: OnTaskStart #%d: %v\n", issueNum, err)
+	}
+}
+
+func (d *Dispatcher) callOnTaskDone(ctx context.Context, issueNum int, success bool) {
+	if d.OnTaskDone == nil || issueNum == 0 {
+		return
+	}
+	if err := d.OnTaskDone(ctx, issueNum, success); err != nil {
+		fmt.Fprintf(os.Stderr, "dispatch: OnTaskDone #%d success=%v: %v\n", issueNum, success, err)
+	}
+}
+
+// IssueNumberFromTask extracts the GitHub issue number from Task.Source.URL.
+// Returns 0 for non-issue tasks (TODO.md items).
+func IssueNumberFromTask(t sources.Task) int {
+	if t.Source.URL == "" {
+		return 0
+	}
+	// URL format: https://github.com/owner/repo/issues/42
+	parts := strings.Split(t.Source.URL, "/")
+	if len(parts) < 2 {
+		return 0
+	}
+	last := parts[len(parts)-1]
+	n, err := strconv.Atoi(last)
+	if err != nil {
+		return 0
+	}
+	// Sanity-check: second-to-last segment must be "issues".
+	if parts[len(parts)-2] != "issues" {
+		return 0
+	}
+	return n
 }
 
 // uniqueBranchNames produces a stable per-item branch name and ensures
