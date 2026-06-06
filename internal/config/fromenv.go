@@ -92,7 +92,7 @@ func fromEnvCore() (*Config, error) {
 	repoName := envOrDefault("REPO_NAME", "audiobook-organizer")
 	repoOwner := envOrDefault("REPO_OWNER", "jdfalk")
 	implProvider := ProviderName(strings.ToLower(envOrDefault("IMPLEMENTER_PROVIDER", "openai")))
-	triageModel := envOrDefault("TRIAGE_MODEL", "o4-mini")
+	triageModel := envOrDefault("TRIAGE_MODEL", "gpt-4.1")
 	cheapestOnly := isTruthy(os.Getenv("CHEAPEST_ONLY"))
 	powerfulOnly := isTruthy(os.Getenv("POWERFUL_ONLY"))
 	taskFilter := strings.ToLower(strings.TrimSpace(os.Getenv("TASK_FILTER")))
@@ -218,15 +218,14 @@ func implementerFromEnv(provider ProviderName, cheapestOnly, powerfulOnly bool) 
 		case cheapestOnly:
 			return LLMFeatureConfig{Provider: ProviderOpenAI, Model: "gpt-5.1-codex-mini"}
 		case powerfulOnly:
-			return LLMFeatureConfig{Provider: ProviderOpenAI, Model: "gpt-5"}
+			return LLMFeatureConfig{Provider: ProviderOpenAI, Model: "gpt-5.3-codex"}
 		default:
 			return LLMFeatureConfig{
 				Provider: ProviderOpenAI,
 				Model:    "gpt-5.1-codex-mini",
 				ModelTiers: []ModelTier{
 					{Model: "gpt-5.1-codex-mini", MaxComplexity: 2},
-					{Model: "gpt-5.3-codex", MaxComplexity: 4},
-					{Model: "gpt-5"},
+					{Model: "gpt-5.3-codex"},
 				},
 			}
 		}

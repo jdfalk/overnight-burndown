@@ -1,5 +1,5 @@
 // file: internal/decompose/decompose.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d3c0mp05-e000-4000-a000-f41l3db47ch0
 //
 // Decompose reads [failed-batch-hard]-tagged items from TODO.md and asks
@@ -7,8 +7,9 @@
 // single agent session. The subtasks are written back to TODO.md immediately
 // after the parent task; the caller is responsible for committing the result.
 //
-// Model choice: claude-haiku-4-5 — decomposition is structured and well-
-// defined, so the cheapest capable model is appropriate.
+// Model choice: claude-sonnet-4-6 — decomposition is the highest-leverage
+// decision in the pipeline; a poorly split task fails again. Sonnet has
+// the reasoning depth to produce genuinely well-scoped subtasks.
 
 package decompose
 
@@ -25,7 +26,7 @@ import (
 	"github.com/falkcorp/overnight-burndown/internal/sources"
 )
 
-const decomposeModel = "claude-haiku-4-5-20251001"
+const decomposeModel = "claude-sonnet-4-6"
 
 // Subtask is the structured output Claude returns for each parent task.
 type Subtask struct {
