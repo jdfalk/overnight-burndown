@@ -123,7 +123,11 @@ type Config struct {
 	// TaskFilter selects which subset of TODO tasks to collect.
 	// "failed-batch" picks up [failed-batch]-tagged items for the hard run.
 	// Empty (default) = normal nightly collection.
-	TaskFilter string             `yaml:"task_filter"`
+	TaskFilter string `yaml:"task_filter"`
+
+	// MaxTasks caps the number of tasks dispatched per run. 0 = unlimited.
+	// Useful for test runs to avoid burning tokens on the full queue.
+	MaxTasks int `yaml:"max_tasks"`
 }
 
 // TaskHubConfig identifies a central GitHub repository that holds task specs

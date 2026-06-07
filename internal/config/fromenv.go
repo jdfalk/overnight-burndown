@@ -96,6 +96,14 @@ func fromEnvCore() (*Config, error) {
 	cheapestOnly := isTruthy(os.Getenv("CHEAPEST_ONLY"))
 	powerfulOnly := isTruthy(os.Getenv("POWERFUL_ONLY"))
 	taskFilter := strings.ToLower(strings.TrimSpace(os.Getenv("TASK_FILTER")))
+	maxTasks := 0
+	if v := strings.TrimSpace(os.Getenv("MAX_TASKS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("config fromenv: MAX_TASKS: %w", err)
+		}
+		maxTasks = n
+	}
 	if powerfulOnly {
 		cheapestOnly = false
 	}
@@ -180,6 +188,7 @@ func fromEnvCore() (*Config, error) {
 	}
 
 	cfg.TaskFilter = taskFilter
+	cfg.MaxTasks = maxTasks
 
 	if err := cfg.resolveGitHubEnvVars(); err != nil {
 		return nil, err

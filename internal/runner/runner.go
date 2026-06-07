@@ -273,6 +273,10 @@ func (r *Runner) runRepo(ctx context.Context, repoCfg config.RepoConfig, t triag
 		return nil, fmt.Errorf("collect: %w", err)
 	}
 	tasks = r.filterFreshTasks(tasks)
+	if r.Config.MaxTasks > 0 && len(tasks) > r.Config.MaxTasks {
+		slog.InfoContext(ctx, "capping task count", "max", r.Config.MaxTasks, "total", len(tasks))
+		tasks = tasks[:r.Config.MaxTasks]
+	}
 	if len(tasks) == 0 {
 		return out, nil
 	}
