@@ -119,6 +119,7 @@ func RunOpenAIResponses(ctx context.Context, client openai.Client, models []stri
 			// needed, and no risk of the "no tool output" 400 that the
 			// standalone endpoint raises when called mid-iteration.
 			ContextManagement: []responses.ResponseNewParamsContextManagement{{
+				Type:             "compaction",
 				CompactThreshold: openai.Int(80_000),
 			}},
 			// User identifies the caller in the OpenAI usage dashboard.
