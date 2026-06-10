@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 9e3a4b5c-6d7e-8f9a-0b1c-2d3e4f5a6b7c -->
 
 # overnight-burndown — TODO
@@ -19,6 +19,7 @@ collapses prompt-token cost for our 5–15 iteration agent loop. Spec:
 - [ ] **RESP-2** Migrate `internal/triage/openai.go` to Responses (single forced tool call — lowest risk first)
 - [x] **RESP-3** Default `implementer.api=responses` — Responses is now the default path in `main.go`; Chat Completions is opt-in via `api: chat-completions` (`2ea6fdd`)
 - [x] **RESP-4** Complexity-based model tier selection replaces runtime fallback chain; retry tests + tier tests added (`e6ece17`) — full mocked PreviousResponseID round-trip still pending
+- [x] **RESP-CM** Remove `ContextManagement` from `ResponseNewParams` — API rejected it with `400 "Unsupported context_management type: ''"`. Switched to explicit `/responses/compact` endpoint after 80K tokens. (PR #62, `18f0014`)
 - [ ] **RESP-5** Soak two clean nightlies, then delete the Chat Completions path
 
 ## Backlog

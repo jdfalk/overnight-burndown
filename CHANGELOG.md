@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`internal/agent/openai_responses.go`** (PR #62): Removed `ContextManagement`
+  from `ResponseNewParams`. OpenAI's Responses API rejects the field with
+  `400 "Unsupported context_management type: ''"` even when `Type: "compaction"`
+  is set. Replaced with proactive compaction via the dedicated
+  `client.Responses.Compact` call once cumulative input tokens since last compact
+  exceed 80K tokens. This is functionally equivalent (prevents context overflow)
+  using the stable `/responses/compact` endpoint.
+
 ### Added
 - **Pluggable LLM providers** — every LLM-using feature (triage, implementer
   agent) picks its backend independently via config. Anthropic + OpenAI ship
